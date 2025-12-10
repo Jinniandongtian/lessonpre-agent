@@ -1,0 +1,32 @@
+# 核心依赖
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# LLM客户端
+openai>=1.0.0
+
+# PDF处理
+PyMuPDF>=1.23.0  # fitz，用于PDF文本提取
+pdf2image>=1.16.0  # PDF转图片（OCR用）
+pytesseract>=0.3.10  # OCR
+Pillow>=10.0.0  # 图像处理
+
+# 向量存储和检索
+faiss-cpu>=1.7.4  # Facebook AI Similarity Search（推荐）
+# 或使用Chroma（可选）
+# chromadb>=0.4.0
+
+# Embedding模型
+sentence-transformers>=2.2.0  # Sentence-BERT（可选，如果不用OpenAI）
+
+# PDF导出
+markdown>=3.5.0
+weasyprint>=60.0  # PDF导出（推荐，纯Python）
+# 或使用pdfkit（需要系统安装wkhtmltopdf）
+# pdfkit>=1.0.0
+
+# 其他工具
+python-multipart>=0.0.6  # FastAPI文件上传支持
+python-dotenv>=1.0.0  # 环境变量管理
+numpy>=1.24.0  # 数值计算
