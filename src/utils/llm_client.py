@@ -56,13 +56,15 @@ class SiliconFlowClient(OpenAIClient):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "deepseek-chat",
-        base_url: str = "https://api.siliconflow.cn/v1",
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
     ):
         api_key = api_key or os.getenv("SILICONFLOW_API_KEY")
         if not api_key:
             raise ValueError("需要设置SILICONFLOW_API_KEY环境变量或传入api_key")
-        super().__init__(api_key=api_key, model=model, base_url=base_url)
+        resolved_model = model or os.getenv("SILICONFLOW_MODEL")
+        resolved_base_url = base_url or os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+        super().__init__(api_key=api_key, model=resolved_model, base_url=resolved_base_url)
 
 
 class MockLLMClient(LLMClient):

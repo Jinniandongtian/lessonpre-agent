@@ -10,11 +10,11 @@ class EmbeddingModel:
         """
         Args:
             model_name: 模型名称，可选 "openai", "sentence-bert"
-                        默认会根据环境变量选择：
-                        - 如果存在 SILICONFLOW_API_KEY：使用 openai 协议 + deepseek-embedding
-                        - 否则使用 text-embedding-3-small (OpenAI)
+                        默认 openai 协议，Embedding 模型名来源：
+                        - 优先 .env 的 EMBEDDING_MODEL
+                        - 否则：有 SILICONFLOW_API_KEY 用 text-embedding-v1
+                          否则用 text-embedding-3-small
         """
-        # 自动选择模式
         self.model_name = model_name or "openai"
         self._model = None
         self._init_model()
@@ -25,13 +25,17 @@ class EmbeddingModel:
             api_key = os.getenv("OPENAI_API_KEY") or os.getenv("SILICONFLOW_API_KEY")
             if not api_key:
                 raise ValueError("需要设置 OPENAI_API_KEY 或 SILICONFLOW_API_KEY")
-            
-            # 如果使用 SiliconFlow，默认用官方提供的通用 embedding 模型 text-embedding-v1
-            # （可在 .env 设置 EMBEDDING_MODEL 覆盖，常用：deepseek-embedding）
-            if os.getenv("SILICONFLOW_API_KEY"):
-                self._model = os.getenv("EMBEDDING_MODEL", "text-embedding-v1")
+
+            # 模型选择逻辑：优先 .env 的 EMBEDDING_MODEL
+            env_model = os.getenv("EMBEDDING_MODEL")
+            if env_model:
+                self._model = env_model
             else:
-                self._model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+                # 没配则根据是否走 SiliconFlow 选择默认
+                if os.getenv("SILICONFLOW_API_KEY"):
+                    self._model = "text-embedding-v1"
+                else:
+                    self._model = "text-embedding-3-small"
         elif self.model_name == "sentence-bert":
             try:
                 from sentence_transformers import SentenceTransformer

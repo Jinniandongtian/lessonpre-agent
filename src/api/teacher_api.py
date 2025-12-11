@@ -70,6 +70,7 @@ async def upload_pdf_exam(
     exam_name: Optional[str] = Form(None),
     source_type: str = Form("期中"),  # 期中/期末/高考/模拟
     ocr_enabled: bool = Form(True),
+    use_regex_fallback: bool = Form(False),
 ):
     """
     上传PDF试卷，自动提取题目并存储到向量库
@@ -106,12 +107,15 @@ async def upload_pdf_exam(
         }
         
         print(f"开始处理PDF: {pdf_filename}")
+        print(f"PDF文件大小: {pdf_path.stat().st_size / 1024:.2f} KB")
         questions = process_pdf_to_questions(
             pdf_path=str(pdf_path),
             meta=meta,
             ocr_enabled=ocr_enabled,
-            llm_client=llm_client
+            llm_client=llm_client,
+            use_regex_fallback=use_regex_fallback
         )
+        print(f"题目提取完成，共提取 {len(questions)} 道题目")
         
         if not questions:
             return {
