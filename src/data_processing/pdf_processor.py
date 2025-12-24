@@ -2,7 +2,7 @@
 import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-import fitz  # PyMuPDF
+import fitz  # PyMuPDF，用于提取原生pdf文本
 from PIL import Image
 import io
 import os
@@ -11,8 +11,8 @@ import json
 import hashlib
 
 try:
-    import pytesseract
-    from pdf2image import convert_from_path
+    import pytesseract # 用于OCR，处理扫描版PDF
+    from pdf2image import convert_from_path # 用于将PDF转换为图片
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
@@ -123,13 +123,38 @@ class PDFProcessor:
     def extract_text_with_ocr(self, pdf_path: str, max_pages: Optional[int] = None) -> str:
         if not OCR_AVAILABLE:
             raise RuntimeError("OCR功能未启用或未安装相关依赖")
+        
+        # 通过灰度化+二值化提升对比度，让OCR看得更清楚
+        def _preprocess_for_ocr(img: Image.Image) -> Image.Image:
+            try:
+                gray = img.convert("L")
+                bw = gray.point(lambda p: 255 if p > 180 else 0)
+                return bw
+            except Exception:
+                return img
+        
+        # OCR后的文本后处理：清理空格/换行/特殊字符
+        def _postprocess_ocr_text(t: str) -> str:
+            if not t:
+                return ""
+            t = t.replace("\u00a0", " ")
+            t = re.sub(r"[ \t]{2,}", " ", t)
+            t = re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", t)
+            t = re.sub(r"\n{3,}", "\n\n", t)
+            return t
 
         # pdf2image 支持 first_page / last_page（从1开始）
         first_page = 1
         last_page = max_pages if max_pages else None
+        try:
+            dpi = int(os.getenv("OCR_DPI", "400"))
+        except Exception:
+            dpi = 400
+        # oem 1代表使用LSTM 深度学习引擎
+        tesseract_config = os.getenv("TESSERACT_CONFIG", "--oem 1 --psm 6")
         images = convert_from_path(
             pdf_path,
-            dpi=300,
+            dpi=dpi,
             poppler_path=self.poppler_path,
             first_page=first_page,
             last_page=last_page
@@ -137,7 +162,9 @@ class PDFProcessor:
         print(f"OCR: 已将 PDF 转换为 {len(images)} 张图片")
         all_text = []
         for i, image in enumerate(images):
-            text = pytesseract.image_to_string(image, lang='chi_sim+eng')
+            processed = _preprocess_for_ocr(image)
+            text = pytesseract.image_to_string(processed, lang='chi_sim+eng', config=tesseract_config)
+            text = _postprocess_ocr_text(text)
             all_text.append(f"--- 第 {i+1} 页 ---\n{text}\n")
         return "\n".join(all_text)
     
@@ -180,7 +207,7 @@ class PDFProcessor:
         text = re.sub(r'\n{3,}', '\n\n', text)
         # 保留更多数学符号：^ / % × ÷ √ ≤ ≥ ≈ ∑ ∏ π · _
         text = re.sub(
-            r'[^\u4e00-\u9fa5a-zA-Z0-9\s\.\,\;\:\!\?\(\)\[\]\{\}\+\-\*\/\=\>\<\^％%×÷√≤≥≈∑∏π·_]',
+            r'[^\u4e00-\u9fa5a-zA-Z0-9\s\.\,\;\:\!\?\(\)\[\]\{\}\+\-\*\/\=\>\<\^％%×÷√≤≥≈∑∏π·_∠°′″→|‖∥⊥∈∉⊂⊆⊇∪∩±≡≠]',
             '',
             text
         )
@@ -368,11 +395,11 @@ class QuestionExtractor:
     def batch_is_exam_instruction(self, texts: List[str]) -> List[bool]:
         """批量判断是否为试卷说明（使用LLM批量处理，提高效率）"""
         if not self.llm_client or len(texts) == 0:
-            return [self._is_exam_instruction(text) for text in texts]
+            return [self._is_exam_instruction_with_llm(text) for text in texts]
         
         # 如果数量少，逐个处理
         if len(texts) <= 3:
-            return [self._is_exam_instruction(text) for text in texts]
+            return [self._is_exam_instruction_with_llm(text) for text in texts]
         
         # 批量处理
         try:
@@ -409,7 +436,7 @@ class QuestionExtractor:
             print(f"批量判断试卷说明失败: {e}，改用逐个判断")
         
         # 失败时逐个判断
-        return [self._is_exam_instruction(text) for text in texts]
+        return [self._is_exam_instruction_with_llm(text) for text in texts]
     
     def _is_question_complete(self, content: str) -> bool:
         """验证题目是否完整（包含题号、题干、选项等）"""
@@ -490,6 +517,93 @@ class QuestionExtractor:
         if max_n <= 0:
             return []
         return list(range(1, max_n + 1))
+
+    def _parse_llm_json_array(self, resp: str) -> List[Dict[str, Any]]:
+        parsed: List[Dict[str, Any]] = []
+        if not resp:
+            return parsed
+        cleaned = resp.strip()
+        cleaned = re.sub(r"^```json\s*", "", cleaned, flags=re.IGNORECASE | re.MULTILINE)
+        cleaned = re.sub(r"^```\s*", "", cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
+        start = cleaned.find("[")
+        end = cleaned.rfind("]")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start : end + 1]
+        cleaned = cleaned.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+        cleaned = re.sub(r",\s*]", "]", cleaned)
+        cleaned = re.sub(r",\s*}", "}", cleaned)
+        try:
+            obj = json.loads(cleaned)
+            if isinstance(obj, list):
+                return [x for x in obj if isinstance(x, dict)]
+        except Exception:
+            pass
+        try:
+            obj_matches = re.findall(r"\{[^{}]*\}", cleaned, flags=re.DOTALL)
+            for obj_str in obj_matches:
+                try:
+                    parsed_obj = json.loads(obj_str)
+                    if isinstance(parsed_obj, dict):
+                        parsed.append(parsed_obj)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return parsed
+
+    def _recover_missing_questions_with_llm(
+        self,
+        text: str,
+        meta: Dict[str, Any],
+        missing_nums: List[int],
+    ) -> List[Dict[str, Any]]:
+        if not self.llm_client or not text or not missing_nums:
+            return []
+
+        nums_text = ", ".join(str(n) for n in missing_nums)
+        prompt = f"""你是一个专业的数学试卷题目提取助手。
+
+我已经从试卷文本中提取出部分题目，但缺失了题号为：{nums_text} 的题目。
+
+请你只从下面给出的试卷文本中，找出这些缺失题号对应的**完整题目**，并以JSON数组返回。
+
+要求：
+- 必须严格按题号匹配（只返回题号属于 {nums_text} 的题）
+- content 必须尽量包含题号、完整题干、以及所有小问/选项（若有）
+- 如果某个缺失题号在文本中确实找不到，请不要编造，不要输出该题号
+
+返回格式（只返回markdown ```json 代码块包裹的JSON数组，不要其他文字）：
+```json
+[
+  {{"index": 1, "content": "6. ...", "question_type": "选择题"}},
+  {{"index": 2, "content": "7. ...", "question_type": "填空题"}}
+]
+```
+
+试卷文本：
+{text}
+"""
+
+        try:
+            response = self.llm_client.generate(prompt)
+            recovered = self._parse_llm_json_array(response)
+            valid: List[Dict[str, Any]] = []
+            missing_set = set(int(n) for n in missing_nums)
+            for q in recovered:
+                content = (q.get("content") or "").strip()
+                if not content:
+                    continue
+                n = self._extract_question_number(content)
+                if n and n.isdigit() and int(n) in missing_set:
+                    q["source_meta"] = meta
+                    if not q.get("question_type") or q.get("question_type") == "未知题型":
+                        q["question_type"] = self._infer_question_type_heuristic(content)
+                    valid.append(q)
+            return valid
+        except Exception as e:
+            print(f"缺题补救（LLM）失败: {e}")
+            return []
 
     def _merge_questions_by_number(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not questions:
@@ -589,7 +703,7 @@ class QuestionExtractor:
         if self.llm_client:
             print("优先使用LLM智能提取题目...")
             llm_questions = self._extract_with_llm(text, meta)
-            llm_questions = [q for q in llm_questions if not self.is_exam_instruction_with_llm(q.get('content', ''))]
+            llm_questions = [q for q in llm_questions if not self._is_exam_instruction_with_llm(q.get('content', ''))]
 
             llm_questions = self._merge_questions_by_number(llm_questions)
 
@@ -605,18 +719,24 @@ class QuestionExtractor:
             missing_nums = [n for n in expected_nums if n not in present_nums]
             if missing_nums:
                 try:
-                    print("LLM提取题目失败，开始使用正则备用...")
-                    regex_candidates = self._extract_with_regex(text, meta)
-                    by_num: Dict[int, Dict[str, Any]] = {}
-                    for rq in regex_candidates:
-                        rn = self._extract_question_number((rq.get('content', '') or '').strip())
-                        if rn and rn.isdigit():
-                            by_num[int(rn)] = rq
+                    recovered_items = self._recover_missing_questions_with_llm(text, meta, missing_nums)
                     recovered = 0
-                    for mn in missing_nums:
-                        if mn in by_num:
-                            llm_questions.append(by_num[mn])
-                            recovered += 1
+                    if recovered_items:
+                        llm_questions.extend(recovered_items)
+                        recovered = len(recovered_items)
+
+                    if not recovered:
+                        print("缺题补救（LLM）无结果，开始使用正则备用...")
+                        regex_candidates = self._extract_with_regex(text, meta)
+                        by_num: Dict[int, Dict[str, Any]] = {}
+                        for rq in regex_candidates:
+                            rn = self._extract_question_number((rq.get('content', '') or '').strip())
+                            if rn and rn.isdigit():
+                                by_num[int(rn)] = rq
+                        for mn in missing_nums:
+                            if mn in by_num:
+                                llm_questions.append(by_num[mn])
+                                recovered += 1
                     if recovered:
                         llm_questions = self._merge_questions_by_number(llm_questions)
                         print(f"缺题补救：补回 {recovered} 道题（缺失题号: {missing_nums}）")
@@ -648,7 +768,7 @@ class QuestionExtractor:
         if use_regex_fallback:
             print("使用正则表达式提取（备用方案）...")
             regex_questions = self._extract_with_regex(text, meta)
-            regex_questions = [q for q in regex_questions if not self._is_exam_instruction(q.get('content', ''))]
+            regex_questions = [q for q in regex_questions if not self._is_exam_instruction_with_llm(q.get('content', ''))]
             print(f"✓ 正则表达式提取到 {len(regex_questions)} 道题目")
             return regex_questions
         else:
