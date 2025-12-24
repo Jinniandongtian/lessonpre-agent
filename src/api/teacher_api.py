@@ -3,6 +3,9 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from typing import Optional
 import uuid
+import re
+import hashlib
+import traceback
 from pathlib import Path
 
 from ..utils.config import Config
@@ -64,84 +67,184 @@ async def root():
 @app.post("/pdf/upload")
 async def upload_pdf_exam(
     pdf_file: UploadFile = File(...),
-    region: str = Form(...),
-    year: int = Form(...),
-    grade: str = Form(...),
+
+    # ✅ 改为可选：用户不传也能跑 auto meta
+    region: Optional[str] = Form(None),
+    year: Optional[int] = Form(None),
+    grade: Optional[str] = Form(None),
     exam_name: Optional[str] = Form(None),
-    source_type: str = Form("期中"),  # 期中/期末/高考/模拟
+    source_type: Optional[str] = Form(None),  # 期中/期末/高考/模拟/一模/二模...
+
+    # ✅ 新增：自动识别元数据
+    auto_meta: bool = Form(True),
+    meta_pages: int = Form(2),  # 只取前N页做元数据识别（建议 1~2）
+
     ocr_enabled: bool = Form(True),
     use_regex_fallback: bool = Form(False),
 ):
     """
     上传PDF试卷，自动提取题目并存储到向量库
-    
+
     支持：
     - 扫描版PDF（自动OCR）
     - 原生PDF（直接提取文本）
     - 自动识别题型和知识点
     - 自动向量化存储
+    - ✅ 自动识别元数据（region/year/grade/exam_name/source_type），并给出置信度/需确认字段
     """
     if vector_db is None or embedding_model is None:
         raise HTTPException(status_code=500, detail="服务未正确初始化，请检查日志")
-    
+
     try:
+        def _normalize_question_content(text: str) -> str:
+            t = (text or "").strip()
+            t = re.sub(r"^\s*\(?\s*\d+\s*\)?\s*[\.、]\s*", "", t)
+            t = re.sub(r"\s+", " ", t)
+            t = t.lower()
+            t = re.sub(r"[\s\u3000]+", "", t)
+            t = re.sub(r"[，,。\.；;：:！!？?（）()【】\[\]《》<>“”\"'‘’、]", "", t)
+            return t
+
         # 1. 保存上传的PDF
         file_ext = Path(pdf_file.filename).suffix.lower()
         if file_ext != ".pdf":
             raise HTTPException(status_code=400, detail="只支持PDF文件")
-        
+
         pdf_filename = f"{uuid.uuid4().hex[:16]}.pdf"
         pdf_path = Config.PDF_STORAGE_PATH / pdf_filename
-        
+
         with open(pdf_path, "wb") as f:
             content = await pdf_file.read()
             f.write(content)
-        
-        # 2. 处理PDF，提取题目
-        meta = {
+
+        # 2. 组装 meta（用户提供的字段优先；其余由 auto_meta 补全）
+        user_meta: Dict[str, Any] = {
             "region": region,
             "year": year,
             "grade": grade,
-            "exam_name": exam_name or f"{year}年{region}{source_type}",
+            "exam_name": exam_name,
             "source_type": source_type,
         }
-        
+        # 去掉 None/空串，避免覆盖自动识别结果
+        user_meta = {k: v for k, v in user_meta.items() if v is not None and str(v).strip() != ""}
+
         print(f"开始处理PDF: {pdf_filename}")
         print(f"PDF文件大小: {pdf_path.stat().st_size / 1024:.2f} KB")
-        questions = process_pdf_to_questions(
-            pdf_path=str(pdf_path),
-            meta=meta,
-            ocr_enabled=ocr_enabled,
-            llm_client=llm_client,
-            use_regex_fallback=use_regex_fallback
-        )
+
+        # 3. 调用 pdf 处理（兼容新旧 process_pdf_to_questions 返回类型）
+        result = None
+        try:
+            # 如果你已经按方案给 process_pdf_to_questions 加了 auto_meta/meta_pages 参数
+            result = process_pdf_to_questions(
+                pdf_path=str(pdf_path),
+                meta=user_meta,
+                ocr_enabled=ocr_enabled,
+                llm_client=llm_client,
+                use_regex_fallback=use_regex_fallback,
+                auto_meta=auto_meta,
+                meta_pages=meta_pages,
+            )
+        except TypeError:
+            # 兼容旧版本签名（还没加 auto_meta/meta_pages）
+            result = process_pdf_to_questions(
+                pdf_path=str(pdf_path),
+                meta=user_meta,
+                ocr_enabled=ocr_enabled,
+                llm_client=llm_client,
+                use_regex_fallback=use_regex_fallback,
+            )
+
+        # 4. 统一解析 result
+        # - 新版：result 是 dict: {"questions":..., "meta_used":..., "meta_confidence":...}
+        # - 旧版：result 是 list[question]
+        if isinstance(result, dict):
+            questions = result.get("questions", []) or []
+            meta_used = result.get("meta_used", user_meta) or user_meta
+            meta_inferred = result.get("meta_inferred", {}) or {}
+            meta_confidence = result.get("meta_confidence", {}) or {}
+            meta_evidence = result.get("meta_evidence", {}) or {}
+        else:
+            questions = result or []
+            meta_used = user_meta
+            meta_inferred = {}
+            meta_confidence = {}
+            meta_evidence = {}
+
+        # 5. 如果 meta 仍不完整，给一个兜底 exam_name（避免下游存储缺字段）
+        #    注意：这个兜底不会覆盖用户/自动识别的 exam_name
+        if not meta_used.get("exam_name"):
+            y = meta_used.get("year", "")
+            r = meta_used.get("region", "")
+            st = meta_used.get("source_type", "")
+            fallback = f"{y}年{r}{st}".strip()
+            meta_used["exam_name"] = fallback if fallback else "未命名试卷"
+
         print(f"题目提取完成，共提取 {len(questions)} 道题目")
-        
+
+        deduped_questions = []
+        seen_keys = set()
+        duplicates_removed = 0
+        for q in questions:
+            content = q.get("content", "")
+            key_src = _normalize_question_content(content)
+            key = hashlib.md5(key_src.encode("utf-8")).hexdigest()
+            if key in seen_keys:
+                duplicates_removed += 1
+                continue
+            seen_keys.add(key)
+            q["id"] = q.get("id") or key
+            deduped_questions.append(q)
+        questions = deduped_questions
+        if duplicates_removed:
+            print(f"去重完成：移除重复题目 {duplicates_removed} 道")
+
         if not questions:
             return {
                 "success": False,
                 "message": "未能从PDF中提取到题目，请检查PDF格式",
                 "questions_extracted": 0,
+                "duplicates_removed": duplicates_removed,
+                "meta_used": meta_used,
+                "meta_inferred": meta_inferred,
+                "meta_confidence": meta_confidence,
+                "meta_evidence": meta_evidence,
             }
-        
-        # 3. 为题目生成向量
+
+        # 6. needs_confirmation（仅当你实现了 meta_confidence 时才有意义）
+        needs_confirmation = []
+        if meta_confidence:
+            # 你可以调整阈值，比如 0.7
+            threshold = 0.7
+            keys = ["region", "year", "grade", "exam_name", "source_type"]
+            needs_confirmation = [k for k in keys if meta_confidence.get(k, 0.0) < threshold]
+
+        # 7. 为题目生成向量
         print(f"为 {len(questions)} 道题目生成向量...")
         question_contents = [q["content"] for q in questions]
         embeddings = embedding_model.encode(question_contents)
-        
-        # 4. 存储到向量库
+
+        # 8. 存储到向量库
         print(f"存储到向量库...")
         vector_db.add_questions(questions, embeddings)
-        
+
         return {
             "success": True,
             "message": f"成功提取并存储 {len(questions)} 道题目",
             "questions_extracted": len(questions),
+            "duplicates_removed": duplicates_removed,
             "vector_db_total": vector_db.count(),
+
+            # ✅ 新增：把元数据结果返回给前端/调用方，方便确认与回流
+            "meta_used": meta_used,
+            "meta_inferred": meta_inferred,
+            "meta_confidence": meta_confidence,
+            "needs_confirmation": needs_confirmation,
+            "meta_evidence": meta_evidence,
         }
-    
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"处理失败: {repr(e)}")
 
 
 @app.post("/lesson/handout")

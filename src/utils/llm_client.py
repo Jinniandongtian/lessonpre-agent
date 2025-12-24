@@ -1,5 +1,6 @@
 """LLM客户端封装"""
 import os
+import httpx
 from typing import Optional
 from abc import ABC, abstractmethod
 
@@ -27,13 +28,22 @@ class OpenAIClient(LLMClient):
         self.base_url = base_url
         if not self.api_key:
             raise ValueError("需要设置OPENAI_API_KEY环境变量或传入api_key")
+        
+        # 显式禁用代理，避免系统代理干扰（尤其是国内访问 SiliconFlow 时）
+        # trust_env=False 告诉 httpx 忽略环境变量中的代理设置
+        # 设置较大的超时时间（300s），因为大型 PDF 内容的 LLM 处理可能较慢
+        self.http_client = httpx.Client(proxy=None, trust_env=False, timeout=300.0)
     
     def generate(self, prompt: str, **kwargs) -> str:
         """调用OpenAI兼容的Chat Completions接口"""
         try:
             from openai import OpenAI
             
-            client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            client = OpenAI(
+                api_key=self.api_key, 
+                base_url=self.base_url,
+                http_client=self.http_client
+            )
             
             response = client.chat.completions.create(
                 model=self.model,

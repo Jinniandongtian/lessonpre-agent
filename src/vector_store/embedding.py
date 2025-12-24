@@ -1,91 +1,105 @@
 """Embedding模型封装"""
-from typing import List, Optional
+from __future__ import annotations
+
 import os
+from typing import List, Optional
+
+import numpy as np
 
 
 class EmbeddingModel:
-    """Embedding模型封装"""
-    
-    def __init__(self, model_name: Optional[str] = None):
-        """
-        Args:
-            model_name: 模型名称，可选 "openai", "sentence-bert"
-                        默认 openai 协议，Embedding 模型名来源：
-                        - 优先 .env 的 EMBEDDING_MODEL
-                        - 否则：有 SILICONFLOW_API_KEY 用 text-embedding-v1
-                          否则用 text-embedding-3-small
-        """
-        self.model_name = model_name or "openai"
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        dimension: int = 384,
+    ):
+        configured_model = os.getenv("EMBEDDING_MODEL")
+        sf_api_key = os.getenv("SILICONFLOW_API_KEY")
+        sf_base_url = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+        st_model_name = model_name or os.getenv(
+            "EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2"
+        )
+        self.model_name = configured_model or st_model_name
+        self._st_model_name = st_model_name
+        self._dimension = int(os.getenv("EMBEDDING_DIM", str(dimension)))
+        self._backend = None
         self._model = None
-        self._init_model()
-    
-    def _init_model(self):
-        """初始化模型"""
-        if self.model_name == "openai":
-            api_key = os.getenv("OPENAI_API_KEY") or os.getenv("SILICONFLOW_API_KEY")
-            if not api_key:
-                raise ValueError("需要设置 OPENAI_API_KEY 或 SILICONFLOW_API_KEY")
+        self._tokenizer = None
+        self._api_client = None
+        self._api_dimension = None
+        self._sf_base_url = sf_base_url
 
-            # 模型选择逻辑：优先 .env 的 EMBEDDING_MODEL
-            env_model = os.getenv("EMBEDDING_MODEL")
-            if env_model:
-                self._model = env_model
-            else:
-                # 没配则根据是否走 SiliconFlow 选择默认
-                if os.getenv("SILICONFLOW_API_KEY"):
-                    self._model = "text-embedding-v1"
-                else:
-                    self._model = "text-embedding-3-small"
-        elif self.model_name == "sentence-bert":
+        # 规则：优先遵循 .env 中的 EMBEDDING_MODEL
+        # - 若设置为 hash/simple：强制使用本地 hash embedding（不依赖 sentence-transformers）
+        # - 其它值：视为 sentence-transformers 的模型名
+        if configured_model and configured_model.strip().lower() in {"hash", "simple"}:
+            self._backend = "hash"
+            return
+
+        if configured_model and sf_api_key:
             try:
-                from sentence_transformers import SentenceTransformer
-                self._model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-            except ImportError:
-                raise ImportError("需要安装 sentence-transformers: pip install sentence-transformers")
-        else:
-            raise ValueError(f"不支持的模型: {self.model_name}")
-    
+                from openai import OpenAI
+
+                self._api_client = OpenAI(api_key=sf_api_key, base_url=sf_base_url)
+                self._backend = "siliconflow"
+                return
+            except Exception:
+                self._api_client = None
+
+        self._backend = "sentence_transformers"
+
+    @property # 把方法伪装成属性
+    def dimension(self) -> int:
+        if self._api_dimension is not None:
+            return int(self._api_dimension)
+        if self._backend == "sentence_transformers" and self._model is not None:
+            dim = getattr(self._model, "get_sentence_embedding_dimension", None)
+            if callable(dim):
+                return int(dim())
+        return self._dimension
+
     def encode(self, texts: List[str]) -> List[List[float]]:
-        """
-        将文本列表转换为向量列表
-        """
-        if self.model_name == "openai":
-            return self._encode_openai(texts)
-        elif self.model_name == "sentence-bert":
-            return self._encode_sentence_bert(texts)
-    
-    def _encode_openai(self, texts: List[str]) -> List[List[float]]:
-        """使用 OpenAI 兼容 API 生成 embedding（支持 SiliconFlow）"""
-        try:
-            from openai import OpenAI
-            
-            api_key = os.getenv("OPENAI_API_KEY") or os.getenv("SILICONFLOW_API_KEY")
-            base_url = os.getenv("SILICONFLOW_BASE_URL", "https://api.openai.com/v1")
-            
-            client = OpenAI(api_key=api_key, base_url=base_url)
-            
-            batch_size = 100
-            all_embeddings = []
-            
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
-                response = client.embeddings.create(
-                    model=self._model,
-                    input=batch
-                )
-                batch_embeddings = [item.embedding for item in response.data]
-                all_embeddings.extend(batch_embeddings)
-            
-            return all_embeddings
-        except Exception as e:
-            raise RuntimeError(f"OpenAI embedding失败: {e}")
-    
-    def _encode_sentence_bert(self, texts: List[str]) -> List[List[float]]:
-        """使用Sentence-BERT生成embedding"""
-        embeddings = self._model.encode(texts, convert_to_numpy=True)
-        return embeddings.tolist()
-    
+        if not texts:
+            return []
+
+        if self._backend == "siliconflow" and self._api_client is not None:
+            try:
+                model = self.model_name
+                resp = self._api_client.embeddings.create(model=model, input=texts)
+                embeddings = [d.embedding for d in resp.data]
+                if embeddings and self._api_dimension is None:
+                    self._api_dimension = len(embeddings[0])
+                return embeddings
+            except Exception:
+                pass
+
+        if self._backend == "sentence_transformers" and self._model is None:
+            try:
+                from sentence_transformers import SentenceTransformer  # type: ignore
+
+                self._model = SentenceTransformer(self._st_model_name)
+            except Exception:
+                return [self._hash_embed(t) for t in texts]
+
+        if self._backend == "sentence_transformers" and self._model is not None:
+            vectors = self._model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+            return vectors.astype(np.float32).tolist()
+
+        return [self._hash_embed(t) for t in texts]
+
     def encode_single(self, text: str) -> List[float]:
-        """编码单个文本"""
         return self.encode([text])[0]
 
+    def _hash_embed(self, text: str) -> List[float]:
+        vec = np.zeros(self._dimension, dtype=np.float32)
+        if not text:
+            return vec.tolist()
+
+        for token in text.split():
+            idx = (hash(token) % self._dimension + self._dimension) % self._dimension
+            vec[idx] += 1.0
+
+        norm = float(np.linalg.norm(vec))
+        if norm > 0:
+            vec /= norm
+        return vec.tolist()

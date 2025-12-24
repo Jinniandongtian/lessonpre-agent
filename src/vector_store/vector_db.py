@@ -131,10 +131,21 @@ class VectorDatabase:
     def _add_faiss(self, questions: List[Dict[str, Any]], embeddings: List[List[float]]):
         """添加到FAISS"""
         embeddings_array = np.array(embeddings, dtype='float32')
+        if embeddings_array.ndim != 2 or embeddings_array.shape[0] == 0:
+            raise ValueError(f"无效的向量矩阵形状: {embeddings_array.shape}")
+        if embeddings_array.shape[0] != len(questions):
+            raise ValueError(f"题目数量({len(questions)})与向量数量({embeddings_array.shape[0]})不匹配")
         
         if self.index is None:
             self.dimension = len(embeddings[0])
             self.index = faiss.IndexFlatL2(self.dimension)
+        else:
+            expected_dim = int(getattr(self.index, 'd', self.dimension or 0))
+            if expected_dim and embeddings_array.shape[1] != expected_dim:
+                raise ValueError(
+                    f"向量维度不匹配：当前索引维度={expected_dim}，本次导入维度={embeddings_array.shape[1]}。"
+                    f"请删除 data/vector_db/index.faiss 和 data/vector_db/metadata.json 后重试。"
+                )
         
         # 添加到索引
         self.index.add(embeddings_array)

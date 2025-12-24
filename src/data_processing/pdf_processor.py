@@ -6,6 +6,9 @@ import fitz  # PyMuPDF
 from PIL import Image
 import io
 import os
+import sys
+import json
+import hashlib
 
 try:
     import pytesseract
@@ -16,12 +19,37 @@ except ImportError:
     print("警告：OCR功能不可用，请安装 pytesseract 和 pdf2image")
 
 
+from .meta_extractor import ExamMetaExtractor
+
 class PDFProcessor:
     """PDF处理器：支持OCR和文本提取"""
     
     def __init__(self, ocr_enabled: bool = True):
         self.ocr_enabled = ocr_enabled and OCR_AVAILABLE
         self.poppler_path = self._resolve_poppler_path()
+        self._setup_library_path()
+
+    def _setup_library_path(self):
+        """
+        设置 DYLD_LIBRARY_PATH 以确保 pdfinfo 加载正确架构的库（MacOS Arm64/x86_64 混合环境问题修复）
+        优先将 poppler_path 的同级 lib 目录加入环境变量
+        """
+        if not self.poppler_path:
+            return
+            
+        # 推断 lib 目录： bin/pdfinfo -> ../lib
+        bin_dir = Path(self.poppler_path)
+        lib_dir = bin_dir.parent / "lib"
+        
+        if lib_dir.exists():
+            lib_path = str(lib_dir.absolute())
+            current_ld_path = os.environ.get("DYLD_LIBRARY_PATH", "")
+            
+            # 如果尚未添加，则添加到最前面
+            if lib_path not in current_ld_path:
+                print(f"Adding to DYLD_LIBRARY_PATH: {lib_path}")
+                os.environ["DYLD_LIBRARY_PATH"] = f"{lib_path}:{current_ld_path}"
+
 
     def _resolve_poppler_path(self) -> Optional[str]:
         """
@@ -35,13 +63,22 @@ class PDFProcessor:
         poppler_env = os.getenv("POPPLER_PATH")
         if poppler_env and os.path.isdir(poppler_env):
             return poppler_env
-        # 2) conda环境
+        # 2) sys.executable 所在目录 (Prioritize Active Env)
+        # 优先使用当前 Python 解释器所在的 bin 目录，确保环境一致性
+        bin_path = os.path.dirname(sys.executable)
+        pdfinfo_path = os.path.join(bin_path, "pdfinfo")
+        if os.path.exists(pdfinfo_path):
+            return bin_path
+
+        # 3) conda环境 (CONDA_PREFIX) - Fallback
         conda_prefix = os.getenv("CONDA_PREFIX")
         if conda_prefix:
             bin_path = os.path.join(conda_prefix, "bin")
             pdfinfo_path = os.path.join(bin_path, "pdfinfo")
             if os.path.exists(pdfinfo_path):
                 return bin_path
+
+
         return None
     
     def is_scanned_pdf(self, pdf_path: str) -> bool:
@@ -82,46 +119,40 @@ class PDFProcessor:
             print(f"判断PDF类型失败: {e}")
             return True  # 默认按扫描版处理
     
-    def extract_text_with_ocr(self, pdf_path: str) -> str:
-        """使用OCR提取扫描版PDF的文本"""
-        if not self.ocr_enabled:
+    # 新增最大页数，方便识别前1-2页的元数据
+    def extract_text_with_ocr(self, pdf_path: str, max_pages: Optional[int] = None) -> str:
+        if not OCR_AVAILABLE:
             raise RuntimeError("OCR功能未启用或未安装相关依赖")
-        
-        try:
-            # 将PDF转换为图片
-            images = convert_from_path(
-                pdf_path,
-                dpi=300,
-                poppler_path=self.poppler_path  # 显式指定poppler目录，避免调用到系统不兼容的pdfinfo
-            )
-            all_text = []
-            
-            for i, image in enumerate(images):
-                # OCR识别
-                text = pytesseract.image_to_string(image, lang='chi_sim+eng')
-                all_text.append(f"--- 第 {i+1} 页 ---\n{text}\n")
-            
-            return "\n".join(all_text)
-        except Exception as e:
-            raise RuntimeError(f"OCR处理失败: {e}")
+
+        # pdf2image 支持 first_page / last_page（从1开始）
+        first_page = 1
+        last_page = max_pages if max_pages else None
+        images = convert_from_path(
+            pdf_path,
+            dpi=300,
+            poppler_path=self.poppler_path,
+            first_page=first_page,
+            last_page=last_page
+        )
+        print(f"OCR: 已将 PDF 转换为 {len(images)} 张图片")
+        all_text = []
+        for i, image in enumerate(images):
+            text = pytesseract.image_to_string(image, lang='chi_sim+eng')
+            all_text.append(f"--- 第 {i+1} 页 ---\n{text}\n")
+        return "\n".join(all_text)
     
-    def extract_text_native(self, pdf_path: str) -> str:
-        """提取原生PDF的文本"""
-        try:
-            doc = fitz.open(pdf_path)
-            all_text = []
-            
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                text = page.get_text()
-                all_text.append(f"--- 第 {page_num + 1} 页 ---\n{text}\n")
-            
-            doc.close()
-            return "\n".join(all_text)
-        except Exception as e:
-            raise RuntimeError(f"PDF文本提取失败: {e}")
+    def extract_text_native(self, pdf_path: str, max_pages: Optional[int] = None) -> str:
+        doc = fitz.open(pdf_path)
+        all_text = []
+        page_count = len(doc) if max_pages is None else min(max_pages, len(doc))
+        for page_num in range(page_count):
+            page = doc[page_num]
+            text = page.get_text()
+            all_text.append(f"--- 第 {page_num + 1} 页 ---\n{text}\n")
+        doc.close()
+        return "\n".join(all_text)
     
-    def extract_text(self, pdf_path: str) -> str:
+    def extract_text(self, pdf_path: str, max_pages: Optional[int] = None) -> str:
         """
         提取PDF文本（自动判断扫描版或原生版）
         
@@ -133,13 +164,10 @@ class PDFProcessor:
             raise FileNotFoundError(f"PDF文件不存在: {pdf_path}")
         
         is_scanned = self.is_scanned_pdf(str(pdf_path))
-        
         if is_scanned:
-            print(f"检测到扫描版PDF，使用OCR提取文本...")
-            return self.extract_text_with_ocr(str(pdf_path))
+            return self.extract_text_with_ocr(str(pdf_path), max_pages=max_pages)
         else:
-            print(f"检测到原生PDF，直接提取文本...")
-            return self.extract_text_native(str(pdf_path))
+            return self.extract_text_native(str(pdf_path), max_pages=max_pages) 
     
     def clean_text(self, text: str) -> str:
         """清洗提取的文本，尽量保留数学符号并去掉页码/水印"""
@@ -150,9 +178,9 @@ class PDFProcessor:
         text = re.sub(r'共\s*\d+\s*页', '', text)
         # 合并多余空行
         text = re.sub(r'\n{3,}', '\n\n', text)
-        # 保留更多数学符号：^ / % × ÷ √ ≤ ≥ ≈ ∑ ∏ π ·
+        # 保留更多数学符号：^ / % × ÷ √ ≤ ≥ ≈ ∑ ∏ π · _
         text = re.sub(
-            r'[^\u4e00-\u9fa5a-zA-Z0-9\s\.\,\;\:\!\?\(\)\[\]\{\}\+\-\*\/\=\>\<\^％%×÷√≤≥≈∑∏π·]',
+            r'[^\u4e00-\u9fa5a-zA-Z0-9\s\.\,\;\:\!\?\(\)\[\]\{\}\+\-\*\/\=\>\<\^％%×÷√≤≥≈∑∏π·_]',
             '',
             text
         )
@@ -228,31 +256,6 @@ class QuestionExtractor:
             return "解答题"
         return "未知题型"
     
-    def _is_exam_instruction(self, text: str) -> bool:
-        """判断是否为试卷说明（非题目内容）- 优先使用LLM，否则使用关键词匹配"""
-        # 如果LLM可用，使用LLM智能判断
-        if self.llm_client:
-            return self._is_exam_instruction_with_llm(text)
-        
-        # 备用方案：关键词匹配
-        instruction_keywords = [
-            '答卷前', '答题卡', '考生号', '考场号', '座位号', '填写在',
-            '选择题时', '选出', '涂黑', '如需改动', '用橡皮擦',
-            '非选择题', '黑色字迹', '签字笔', '答在', '答题区域',
-            '超出答题区域', '在草稿纸', '试卷上', '均无效',
-            '考试时间', '满分', '注意事项', '本试卷', '第', '页',
-            '共', '页', '姓名', '班级', '学号'
-        ]
-        text_lower = text.lower()
-        # 如果包含多个说明关键词，很可能是试卷说明
-        keyword_count = sum(1 for kw in instruction_keywords if kw in text_lower)
-        # 如果文本很短且包含说明关键词，很可能是说明
-        if len(text) < 100 and keyword_count >= 2:
-            return True
-        # 如果包含"答题卡"、"考生号"等明显说明词汇
-        if any(kw in text_lower for kw in ['答题卡', '考生号', '考场号', '座位号']):
-            return True
-        return False
     
     def _is_exam_instruction_with_llm(self, text: str) -> bool:
         """使用LLM判断是否为试卷说明"""
@@ -444,6 +447,124 @@ class QuestionExtractor:
         )
         
         return has_math_content
+
+    def _extract_question_number(self, content: str) -> Optional[str]:
+        if not content:
+            return None
+        c = content.strip()
+        m = re.match(r'^\s*(\d+)\s*[\.、\)]', c)
+        if m:
+            return m.group(1)
+        m = re.match(r'^\s*\(\s*(\d+)\s*\)\s*', c)
+        if m:
+            return m.group(1)
+        return None
+
+    def _is_subquestion_only(self, content: str) -> bool:
+        if not content:
+            return False
+        c = content.strip()
+        return bool(re.match(r'^\s*\(\s*\d+\s*\)\s*', c))
+
+    def _normalize_for_dedupe(self, content: str) -> str:
+        t = (content or "").strip()
+        t = re.sub(r"\s+", " ", t)
+        t = t.lower()
+        t = re.sub(r"[\s\u3000]+", "", t)
+        t = re.sub(r"[，,。\.；;：:！!？?（）()【】\[\]《》<>“”\"'‘’、]", "", t)
+        return t
+
+    def _infer_expected_question_numbers(self, text: str) -> List[int]:
+        """从全文文本中粗略推断题号范围（仅提取阿拉伯数字题号）。"""
+        if not text:
+            return []
+        nums = []
+        for m in re.finditer(r'^\s*(\d+)\s*[\.、\)]', text, flags=re.MULTILINE):
+            try:
+                nums.append(int(m.group(1)))
+            except Exception:
+                continue
+        if not nums:
+            return []
+        max_n = max(nums)
+        if max_n <= 0:
+            return []
+        return list(range(1, max_n + 1))
+
+    def _merge_questions_by_number(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not questions:
+            return []
+
+        # buckets：按序号分桶，key=序号（如"1"），value=该序号下的所有问题条目
+        buckets: Dict[str, List[Dict[str, Any]]] = {}
+        passthrough: List[Dict[str, Any]] = []
+        last_number: Optional[str] = None
+
+        # 第一遍遍历：给问题按序号分桶，无序号的暂存到passthrough
+        for q in questions:
+            content = (q.get("content") or "").strip()
+            if not content:
+                continue
+
+            # 如果没有题号且是子题目，加上上一个题的题号
+            number = self._extract_question_number(content)
+            if number is None and self._is_subquestion_only(content) and last_number is not None:
+                number = last_number
+
+            # 无有效序号：暂存到passthrough（最终保留）
+            if number is None:
+                passthrough.append(q)
+                continue
+            # 有有效序号，即不是子题目：更新last_number，放入对应桶
+            last_number = number
+            buckets.setdefault(number, []).append(q)
+
+        merged: List[Dict[str, Any]] = []
+        used_numbers = set()
+
+        for q in questions:
+            content = (q.get("content") or "").strip()
+            number = self._extract_question_number(content)
+            if number is None:
+                continue
+            if number in used_numbers:
+                continue
+            used_numbers.add(number)
+
+            parts = buckets.get(number, [])
+            if not parts:
+                continue
+
+            base = max(parts, key=lambda x: len((x.get("content") or "")))
+            base_text = (base.get("content") or "").strip()
+            base_norm = self._normalize_for_dedupe(base_text)
+
+            extras: List[str] = []
+            for p in parts:
+                t = (p.get("content") or "").strip()
+                if not t:
+                    continue
+                tn = self._normalize_for_dedupe(t)
+                if tn == base_norm:
+                    continue
+                if tn in base_norm:
+                    continue
+                extras.append(t)
+
+            if extras:
+                base["content"] = "\n".join([base_text] + extras)
+            merged.append(base)
+
+        merged.extend(passthrough)
+
+        def _sort_key(item: Dict[str, Any]) -> int:
+            n = self._extract_question_number((item.get("content") or "").strip())
+            return int(n) if n and n.isdigit() else 10**9
+
+        merged.sort(key=_sort_key)
+        for i, q in enumerate(merged):
+            q["index"] = i + 1
+        return merged
     
     def extract_questions_from_text(
         self,
@@ -468,15 +589,54 @@ class QuestionExtractor:
         if self.llm_client:
             print("优先使用LLM智能提取题目...")
             llm_questions = self._extract_with_llm(text, meta)
-            llm_questions = [q for q in llm_questions if not self._is_exam_instruction(q.get('content', ''))]
+            llm_questions = [q for q in llm_questions if not self.is_exam_instruction_with_llm(q.get('content', ''))]
+
+            llm_questions = self._merge_questions_by_number(llm_questions)
+
+            # 缺题补救：用全文题号推断 expected，再用正则切题补齐缺失题号
+            expected_nums = self._infer_expected_question_numbers(text)
+            print(f"推断到预期题号范围: {expected_nums}")
+            present_nums = set()
+            for q in llm_questions:
+                n = self._extract_question_number((q.get('content', '') or '').strip())
+                if n and n.isdigit():
+                    present_nums.add(int(n))
+
+            missing_nums = [n for n in expected_nums if n not in present_nums]
+            if missing_nums:
+                try:
+                    print("LLM提取题目失败，开始使用正则备用...")
+                    regex_candidates = self._extract_with_regex(text, meta)
+                    by_num: Dict[int, Dict[str, Any]] = {}
+                    for rq in regex_candidates:
+                        rn = self._extract_question_number((rq.get('content', '') or '').strip())
+                        if rn and rn.isdigit():
+                            by_num[int(rn)] = rq
+                    recovered = 0
+                    for mn in missing_nums:
+                        if mn in by_num:
+                            llm_questions.append(by_num[mn])
+                            recovered += 1
+                    if recovered:
+                        llm_questions = self._merge_questions_by_number(llm_questions)
+                        print(f"缺题补救：补回 {recovered} 道题（缺失题号: {missing_nums}）")
+                    else:
+                        print(f"缺题补救：未能从正则切题补回缺失题号: {missing_nums}")
+                except Exception as e:
+                    print(f"缺题补救失败: {e}")
             
             # 验证题目完整性
             complete_questions = []
             for q in llm_questions:
-                if self._is_question_complete(q.get('content', '')):
+                content = q.get('content', '')
+                if self._is_question_complete(content):
                     complete_questions.append(q)
                 else:
-                    print(f"  警告：题目不完整，已跳过: {q.get('content', '')[:100]}...")
+                    n = self._extract_question_number(content)
+                    if n is not None and len((content or '').strip()) >= 20:
+                        complete_questions.append(q)
+                    else:
+                        print(f"  警告：题目不完整，已跳过: {q.get('content', '')[:100]}...")
             
             if complete_questions:
                 print(f"✓ LLM提取完成，共 {len(complete_questions)} 道完整题目")
@@ -564,9 +724,9 @@ class QuestionExtractor:
         if not self.llm_client:
             return []
         
-        # 如果文本太长，分块处理（每块8000字符，保留重叠）
-        chunk_size = 8000
-        overlap = 500
+        # 如果文本太长，分块处理（每块更小，避免LLM响应阶段过长被截断）
+        chunk_size = 2000
+        overlap = 400
         chunks = []
         
         if len(text) <= chunk_size:
@@ -577,7 +737,10 @@ class QuestionExtractor:
                 end = min(start + chunk_size, len(text))
                 chunk = text[start:end]
                 chunks.append(chunk)
+                if end == len(text):
+                    break
                 start = end - overlap  # 重叠部分避免题目被截断
+        
         
         all_questions = []
         
@@ -585,7 +748,6 @@ class QuestionExtractor:
 
         def _parse_llm_json(resp: str) -> List[Dict[str, Any]]:
             """对LLM响应做容错解析，尽量恢复JSON数组"""
-            import json
             parsed = []
             cleaned = resp.strip()
             # 去掉markdown代码块
@@ -692,8 +854,10 @@ class QuestionExtractor:
                         
                         # 2. 验证题目完整性
                         if not self._is_question_complete(content):
-                            print(f"    跳过不完整题目: {content[:80]}...")
-                            continue
+                            n = self._extract_question_number(content)
+                            if n is None and not self._is_subquestion_only(content):
+                                print(f"    跳过不完整题目: {content[:80]}...")
+                                continue
                         
                         # 3. 添加元数据
                         q["source_meta"] = meta
@@ -707,8 +871,8 @@ class QuestionExtractor:
                         contents = [q.get('content', '') for q in valid_questions]
                         is_instructions = self.batch_is_exam_instruction(contents)
                         valid_count = 0
-                        for i, q in enumerate(valid_questions):
-                            if not is_instructions[i]:
+                        for qi, q in enumerate(valid_questions):
+                            if not is_instructions[qi]:
                                 all_questions.append(q)
                                 valid_count += 1
                         print(f"  第 {i+1} 块提取到 {valid_count} 道完整有效题目（共{len(valid_questions)}道，过滤{len(valid_questions)-valid_count}道说明/无效）")
@@ -727,11 +891,13 @@ class QuestionExtractor:
         seen_contents = set()
         for q in all_questions:
             content = q.get('content', '').strip()
-            # 使用内容的前100字符作为去重key
-            content_key = content[:100] if len(content) > 100 else content
+            norm = self._normalize_for_dedupe(content)
+            content_key = hashlib.md5(norm.encode("utf-8")).hexdigest()
             if content_key not in seen_contents:
                 seen_contents.add(content_key)
                 unique_questions.append(q)
+
+        unique_questions = self._merge_questions_by_number(unique_questions)
         
         # 补全题型（若缺失或未知）
         for q in unique_questions:
@@ -788,33 +954,41 @@ def process_pdf_to_questions(
     ocr_enabled: bool = True,
     llm_client=None,
     use_regex_fallback: bool = False,
-) -> List[Dict[str, Any]]:
-    """
-    处理PDF文件，提取题目
-    
-    Args:
-        pdf_path: PDF文件路径
-        meta: 元数据（region, year, grade, exam_name等）
-        ocr_enabled: 是否启用OCR
-        llm_client: LLM客户端（用于题目提取和标注）
-    
-    Returns:
-        题目列表
-    """
-    # 1. 提取文本
+    auto_meta: bool = True,            # 新增
+    meta_pages: int = 2,               # 新增：只扫前2页做元数据
+) -> Dict[str, Any]:
     processor = PDFProcessor(ocr_enabled=ocr_enabled)
-    text = processor.extract_text(pdf_path)
+
+    meta_report = {"meta": {}, "confidence": {}, "evidence": {}}
+    meta_merged = dict(meta or {})
+
+    # 1) 自动识别元数据（只在字段缺失或显式开启时）
+    if auto_meta:
+        preview_text = processor.extract_text(pdf_path, max_pages=meta_pages)
+        preview_text = processor.clean_text(preview_text)
+        meta_extractor = ExamMetaExtractor(llm_client=llm_client)
+        meta_report = meta_extractor.extract(preview_text)
+
+        # 合并策略：用户显式传入优先；否则用自动识别补齐
+        inferred = meta_report.get("meta", {})
+        for k, v in inferred.items():
+            if not meta_merged.get(k):
+                meta_merged[k] = v
+
+    # 2) 全文提取与清洗（用于提题）
+    text = processor.extract_text(pdf_path)       # 默认全量
     text = processor.clean_text(text)
-    
-    # 2. 提取题目
+
     extractor = QuestionExtractor(llm_client=llm_client)
-    questions = extractor.extract_questions_from_text(text, meta, use_regex_fallback=use_regex_fallback)
-    
-    # 3. 丰富题目信息（知识点、难度）
-    enriched_questions = []
-    for q in questions:
-        enriched = extractor.enrich_question_with_llm(q)
-        enriched_questions.append(enriched)
-    
-    return enriched_questions
+    questions = extractor.extract_questions_from_text(text, meta_merged, use_regex_fallback=use_regex_fallback)
+
+    enriched_questions = [extractor.enrich_question_with_llm(q) for q in questions]
+
+    return {
+        "questions": enriched_questions,
+        "meta_used": meta_merged,
+        "meta_inferred": meta_report.get("meta", {}),
+        "meta_confidence": meta_report.get("confidence", {}),
+        "meta_evidence": meta_report.get("evidence", {}),
+    }
 
