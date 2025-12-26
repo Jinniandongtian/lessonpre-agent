@@ -147,9 +147,9 @@ class PDFProcessor:
         first_page = 1
         last_page = max_pages if max_pages else None
         try:
-            dpi = int(os.getenv("OCR_DPI", "400"))
+            dpi = int(os.getenv("OCR_DPI", "450"))
         except Exception:
-            dpi = 400
+            dpi = 450
         # oem 1代表使用LSTM 深度学习引擎
         tesseract_config = os.getenv("TESSERACT_CONFIG", "--oem 1 --psm 6")
         images = convert_from_path(
@@ -479,9 +479,17 @@ class QuestionExtractor:
         if not content:
             return None
         c = content.strip()
-        m = re.match(r'^\s*(\d+)\s*[\.、\)]', c)
+        m = re.match(r'^\s*(\d{1,4})\s*(?:[\.、\)．]|\s+)', c)
         if m:
-            return m.group(1)
+            try:
+                n = int(m.group(1))
+            except Exception:
+                return None
+            if 1900 <= n <= 2100:
+                return None
+            if n <= 0 or n > 200:
+                return None
+            return str(n)
         m = re.match(r'^\s*\(\s*(\d+)\s*\)\s*', c)
         if m:
             return m.group(1)
@@ -508,7 +516,13 @@ class QuestionExtractor:
         nums = []
         for m in re.finditer(r'^\s*(\d+)\s*[\.、\)]', text, flags=re.MULTILINE):
             try:
-                nums.append(int(m.group(1)))
+                n = int(m.group(1))
+                # 过滤明显不是题号的数字：年份、过大的数字等
+                if 1900 <= n <= 2100:
+                    continue
+                if n <= 0 or n > 200:
+                    continue
+                nums.append(n)
             except Exception:
                 continue
         if not nums:
@@ -568,6 +582,15 @@ class QuestionExtractor:
 
 请你只从下面给出的试卷文本中，找出这些缺失题号对应的**完整题目**，并以JSON数组返回。
 
+**重要 - OCR纠错：**
+输入文本来自OCR扫描，请根据数学上下文修正常见错误：
+- 数字与字母混淆：`48CD` → `ABCD`，`kBCD` → `A₁B₁C₁D₁`
+- 符号误识别：`山` → `⊥`，`榄长` → `棱长`，`巳知` → `已知`，`焕点` → `焦点`
+- 下标修正：`A1B1C1D1` → `A₁B₁C₁D₁`，`F1F2` → `F₁F₂`
+- 公式符号：`≤` `≥` `∑` `∏` `√` `π` `∈` `∉` `⊂` `⊃` `∩` `∪` `∠` `△` `⊥` `∥`
+- 常见数学术语修正：`焕点` → `焦点`，`余玄` → `余弦`，`正玄` → `正弦`
+- 删除乱码/噪声字符（无意义符号串）
+
 要求：
 - 必须严格按题号匹配（只返回题号属于 {nums_text} 的题）
 - content 必须尽量包含题号、完整题干、以及所有小问/选项（若有）
@@ -576,8 +599,8 @@ class QuestionExtractor:
 返回格式（只返回markdown ```json 代码块包裹的JSON数组，不要其他文字）：
 ```json
 [
-  {{"index": 1, "content": "6. ...", "question_type": "选择题"}},
-  {{"index": 2, "content": "7. ...", "question_type": "填空题"}}
+  {{"index": 1, "content": "6. ...", "question_type": "选择题", "knowledge_points": ["..."], "difficulty": 3}},
+  {{"index": 2, "content": "7. ...", "question_type": "填空题", "knowledge_points": ["..."], "difficulty": 2}}
 ]
 ```
 
@@ -599,6 +622,20 @@ class QuestionExtractor:
                     q["source_meta"] = meta
                     if not q.get("question_type") or q.get("question_type") == "未知题型":
                         q["question_type"] = self._infer_question_type_heuristic(content)
+                    kp = q.get("knowledge_points", [])
+                    if isinstance(kp, str):
+                        kp = [x.strip() for x in re.split(r"[\n,，、;；]+", kp) if x.strip()]
+                    if not isinstance(kp, list):
+                        kp = []
+                    q["knowledge_points"] = [str(x).strip() for x in kp if str(x).strip()]
+                    diff = q.get("difficulty", None)
+                    try:
+                        diff_int = int(diff)
+                    except Exception:
+                        diff_int = None
+                    if diff_int is None or diff_int < 1 or diff_int > 5:
+                        diff_int = 3
+                    q["difficulty"] = diff_int
                     valid.append(q)
             return valid
         except Exception as e:
@@ -705,7 +742,8 @@ class QuestionExtractor:
             llm_questions = self._extract_with_llm(text, meta)
             llm_questions = [q for q in llm_questions if not self._is_exam_instruction_with_llm(q.get('content', ''))]
 
-            llm_questions = self._merge_questions_by_number(llm_questions)
+            if str(os.getenv("MERGE_QUESTIONS_BY_NUMBER", "0")).strip().lower() not in {"0", "false", "no"}:
+                llm_questions = self._merge_questions_by_number(llm_questions)
 
             # 缺题补救：用全文题号推断 expected，再用正则切题补齐缺失题号
             expected_nums = self._infer_expected_question_numbers(text)
@@ -738,7 +776,8 @@ class QuestionExtractor:
                                 llm_questions.append(by_num[mn])
                                 recovered += 1
                     if recovered:
-                        llm_questions = self._merge_questions_by_number(llm_questions)
+                        if str(os.getenv("MERGE_QUESTIONS_BY_NUMBER", "0")).strip().lower() not in {"0", "false", "no"}:
+                            llm_questions = self._merge_questions_by_number(llm_questions)
                         print(f"缺题补救：补回 {recovered} 道题（缺失题号: {missing_nums}）")
                     else:
                         print(f"缺题补救：未能从正则切题补回缺失题号: {missing_nums}")
@@ -910,6 +949,15 @@ class QuestionExtractor:
             
             prompt = f"""你是一个专业的数学试卷题目提取助手。请从以下试卷文本中提取所有数学题目。
 
+**重要提示 - OCR纠错：**
+输入文本来自OCR扫描，可能存在识别错误，请根据数学上下文智能修正：
+- 数字与字母混淆：`48CD` → `ABCD`，`kBCD` → `A₁B₁C₁D₁`，`P−ABCD` → `P-ABCD`
+- 符号误识别：`山` → `⊥`（垂直），`|` → `1`，`O` → `0`，`榄长` → `棱长`，`巳知` → `已知`
+- 下标丢失或乱码：`A1B1C1D1` → `A₁B₁C₁D₁`，`F1F2` → `F₁F₂`
+- 公式符号：`≤` `≥` `∑` `∏` `√` `π` `∈` `∉` `⊂` `⊃` `∩` `∪` `∠` `△` `⊥` `∥`
+- 常见数学术语修正：`焕点` → `焦点`，`余玄` → `余弦`，`正玄` → `正弦`
+- 乱码/噪声字符（如`j 门 az`、`msu`、无意义符号串）应删除
+
 **核心要求 - 题目必须完整：**
 1. **必须包含题号**：如"1."、"2、"、"(1)"、"一、"等
 2. **必须包含完整题干**：题目的完整描述和条件
@@ -922,6 +970,7 @@ class QuestionExtractor:
 - **只提取真正的数学题目**，忽略试卷说明、注意事项、标题等非题目内容
 - **题目必须完整**：不能只提取题干的一部分，必须包含题号、完整题干、所有选项（如果有）
 - **识别题目编号**：题目通常以数字开头（如"1."、"2、"、"(1)"等）
+- **一题一条**：每个JSON对象只能包含一道题；如果文本中出现了下一个题号（如"20."/"20、"/"(20)"），必须在该题号处切分，绝不能把两道题合并到同一个content里
 - **过滤掉以下内容**：
   - 试卷说明（如"答卷前考生务必将..."、"回答选择题时..."等）
   - 页眉页脚（如"第X页"、"共X页"等）
@@ -942,12 +991,16 @@ class QuestionExtractor:
   {{
     "index": 1,
     "content": "1. 已知函数f(x)=x²+1，则f(2)的值为（    ）\nA. 3\nB. 4\nC. 5\nD. 6",
-    "question_type": "选择题"
+    "question_type": "选择题",
+    "knowledge_points": ["函数", "代入求值"],
+    "difficulty": 2
   }},
   {{
     "index": 2,
     "content": "2. 若a+b=5，a-b=1，则a=____，b=____",
-    "question_type": "填空题"
+    "question_type": "填空题",
+    "knowledge_points": ["方程组"],
+    "difficulty": 2
   }}
 ]
 ```
@@ -984,6 +1037,20 @@ class QuestionExtractor:
                         # 若LLM未给出题型或给出未知，使用启发式补全
                         if not q.get("question_type") or q.get("question_type") == "未知题型":
                             q["question_type"] = self._infer_question_type_heuristic(content)
+                        kp = q.get("knowledge_points", [])
+                        if isinstance(kp, str):
+                            kp = [x.strip() for x in re.split(r"[\n,，、;；]+", kp) if x.strip()]
+                        if not isinstance(kp, list):
+                            kp = []
+                        q["knowledge_points"] = [str(x).strip() for x in kp if str(x).strip()]
+                        diff = q.get("difficulty", None)
+                        try:
+                            diff_int = int(diff)
+                        except Exception:
+                            diff_int = None
+                        if diff_int is None or diff_int < 1 or diff_int > 5:
+                            diff_int = 3
+                        q["difficulty"] = diff_int
                         valid_questions.append(q)
                     
                     # 批量判断并过滤试卷说明
@@ -1017,7 +1084,8 @@ class QuestionExtractor:
                 seen_contents.add(content_key)
                 unique_questions.append(q)
 
-        unique_questions = self._merge_questions_by_number(unique_questions)
+        if str(os.getenv("MERGE_QUESTIONS_BY_NUMBER", "0")).strip().lower() not in {"0", "false", "no"}:
+            unique_questions = self._merge_questions_by_number(unique_questions)
         
         # 补全题型（若缺失或未知）
         for q in unique_questions:
@@ -1038,34 +1106,96 @@ class QuestionExtractor:
         """使用LLM丰富题目信息（知识点、难度等）"""
         if not self.llm_client:
             return question
-        
-        prompt = f"""
-请分析以下数学题目，并给出：
-1. 涉及的知识点列表
-2. 难度等级（1-5，1最简单，5最难）
 
-题目内容：
-{question['content']}
+        enriched = self.batch_enrich_questions_with_llm([question])
+        return enriched[0] if enriched else question
 
-请以JSON格式返回：
-{{
-    "knowledge_points": ["知识点1", "知识点2"],
-    "difficulty": 3
-}}
+    def batch_enrich_questions_with_llm(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not questions:
+            return []
+        if not self.llm_client:
+            return questions
+        if str(os.getenv("ENRICH_WITH_LLM", "0")).strip() in {"0", "false", "False", "no", "No"}:
+            return questions
+
+        previews = []
+        for i, q in enumerate(questions):
+            content = (q.get("content") or "").strip()
+            if len(content) > 1200:
+                content = content[:1200]
+            previews.append(f"题目{i+1}：{content}")
+
+        prompt = f"""你是一个数学教研助手。
+
+请对下面每一道数学题给出：
+- knowledge_points：知识点列表（尽量具体，2~6个）
+- difficulty：难度等级（1-5的整数，1最简单，5最难）
+
+{chr(10).join(previews)}
+
+要求：
+- 必须只返回一个 JSON 数组
+- 数组长度必须与题目数量一致
+- 每个元素的 index 从 1 开始
+- 必须用 markdown ```json 代码块包裹
+- 不要输出任何额外解释文字
+
+返回格式示例：
+```json
+[
+  {{"index": 1, "knowledge_points": ["集合", "不等式"], "difficulty": 3}},
+  {{"index": 2, "knowledge_points": ["向量", "数量积"], "difficulty": 2}}
+]
+```
 """
-        
+
         try:
             response = self.llm_client.generate(prompt)
-            import json
-            json_match = re.search(r'\{[^}]+\}', response, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-                question["knowledge_points"] = result.get("knowledge_points", [])
-                question["difficulty"] = result.get("difficulty", 3)
+            results = self._parse_llm_json_array(response)
+            if not results:
+                print(f"LLM批量丰富题目信息：未能解析JSON数组，响应预览: {(response or '')[:200]}")
+                return questions
+
+            by_index: Dict[int, Dict[str, Any]] = {}
+            for r in results:
+                try:
+                    idx = int(r.get("index"))
+                except Exception:
+                    continue
+                if idx <= 0:
+                    continue
+                by_index[idx] = r
+
+            enriched: List[Dict[str, Any]] = []
+            for i, q in enumerate(questions):
+                r = by_index.get(i + 1)
+                if not r:
+                    enriched.append(q)
+                    continue
+
+                kp = r.get("knowledge_points", [])
+                if isinstance(kp, str):
+                    kp = [x.strip() for x in re.split(r"[\n,，、;；]+", kp) if x.strip()]
+                if not isinstance(kp, list):
+                    kp = []
+                kp = [str(x).strip() for x in kp if str(x).strip()]
+
+                diff = r.get("difficulty", None)
+                try:
+                    diff_int = int(diff)
+                except Exception:
+                    diff_int = None
+                if diff_int is None or diff_int < 1 or diff_int > 5:
+                    diff_int = 3
+
+                q["knowledge_points"] = kp
+                q["difficulty"] = diff_int
+                enriched.append(q)
+
+            return enriched
         except Exception as e:
-            print(f"LLM丰富题目信息失败: {e}")
-        
-        return question
+            print(f"LLM批量丰富题目信息失败: {e}")
+            return questions
 
 
 def process_pdf_to_questions(
@@ -1102,7 +1232,13 @@ def process_pdf_to_questions(
     extractor = QuestionExtractor(llm_client=llm_client)
     questions = extractor.extract_questions_from_text(text, meta_merged, use_regex_fallback=use_regex_fallback)
 
-    enriched_questions = [extractor.enrich_question_with_llm(q) for q in questions]
+    need_enrich = False
+    for q in questions:
+        if not q.get("knowledge_points") or q.get("difficulty") in (None, 3, "3"):
+            need_enrich = True
+            break
+
+    enriched_questions = extractor.batch_enrich_questions_with_llm(questions) if need_enrich else questions
 
     return {
         "questions": enriched_questions,

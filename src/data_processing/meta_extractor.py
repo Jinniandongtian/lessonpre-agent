@@ -22,9 +22,16 @@ class ExamMetaExtractor:
 
         # 2) year
         m = re.search(r'(20\d{2})\s*年', head)
+        if not m:
+            m = re.search(r'(20\d{2})\s*[-—–~至一]\s*(20\d{2})\s*学年', head)
+        if not m:
+            m = re.search(r'(20\d{2})\s*[-—–~]\s*(20\d{2})', head)
         if m:
-            meta["year"] = int(m.group(1))
-            conf["year"] = 0.95
+            try:
+                meta["year"] = int(m.group(1))
+                conf["year"] = 0.95
+            except Exception:
+                conf["year"] = 0.0
         else:
             conf["year"] = 0.0
 
@@ -57,14 +64,40 @@ class ExamMetaExtractor:
 
         # 6) exam_name：尽量取包含 year/region/source_type 的那一行
         exam_line = None
-        for ln in lines[:20]:
-            if ("考试" in ln or "试卷" in ln) and len(ln) <= 40:
+        keywords = ("考试", "试卷", "试题", "检测", "测验", "联考", "月考", "期中", "期末")
+        grade_hint = meta.get("grade")
+        st_hint = meta.get("source_type")
+        year_hint = str(meta.get("year")) if meta.get("year") else None
+
+        best_score = -1
+        for ln in lines[:25]:
+            if not any(k in ln for k in keywords):
+                continue
+            if len(ln) > 90:
+                continue
+
+            score = 0
+            if grade_hint and grade_hint in ln:
+                score += 2
+            if st_hint and st_hint in ln:
+                score += 2
+            if year_hint and year_hint in ln:
+                score += 2
+            if "学年" in ln:
+                score += 1
+            if "数学" in ln:
+                score += 1
+
+            if score > best_score:
+                best_score = score
                 exam_line = ln
-                break
+
         if exam_line:
-            meta["exam_name"] = exam_line
-            conf["exam_name"] = 0.7
-            evidence["exam_name_line"] = exam_line
+            cleaned = re.sub(r"[,，]\s*msu.*$", "", exam_line, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            meta["exam_name"] = cleaned
+            conf["exam_name"] = 0.7 if best_score >= 2 else 0.6
+            evidence["exam_name_line"] = cleaned
         else:
             conf["exam_name"] = 0.0
 

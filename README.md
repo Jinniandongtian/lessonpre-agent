@@ -48,10 +48,27 @@ conda activate lessonpre-agent
 # 安装依赖
 pip install -r requirements.txt
 
-# 安装Tesseract OCR（macOS）
-brew install tesseract tesseract-lang
-# Ubuntu: sudo apt-get install tesseract-ocr tesseract-ocr-chi-sim
+# 系统依赖（OCR / PDF处理 / PDF导出）
+# 1) OCR：tesseract
+# 2) pdf2image：poppler（提供 pdftoppm/pdfinfo）
+# 3) PDF 导出：优先 weasyprint（需要 cairo/pango 等系统库）；或可选 pdfkit + wkhtmltopdf
+
+# macOS（Homebrew）
+brew install tesseract tesseract-lang poppler
+
+# Ubuntu / Debian
+# OCR + poppler
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim poppler-utils
+
+# WeasyPrint 依赖（Ubuntu / Debian，若你使用 weasyprint 导出 PDF）
+sudo apt-get install -y libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info
+
+# 可选：pdfkit + wkhtmltopdf（另一条 PDF 导出链路）
+# sudo apt-get install -y wkhtmltopdf
 ```
+
+说明：服务启动时会做一次系统依赖自检，若缺少 tesseract/poppler 或 PDF 导出依赖，会在控制台打印提示与安装命令。
 
 ### 2. 配置API Key
 
@@ -165,6 +182,21 @@ src/
 - [] Web前端界面
 - [] 批量PDF处理
 - [] 题目去重和合并
+
+## 开发进度 
+12月24日
+1、对现有离线 OCR（Tesseract）做了明显增强（DPI/参数/预处理/后处理/保留符号），保留更强PaddleOCR的可能性
+2、补救题目优先使用llm，再使用正则
+3、对于试卷中题目的原始题号，不打算存储，因为后续功能大概率不涉及找到哪张试卷的哪道题
+
+12月25日
+1、对导入题目进行三轮去重：同pdf去重+库id去重+语义相似度去重
+2、去掉聚合题目的逻辑，让llm判断不要把两个题目聚合在一起
+3、对导入题库的质量和数量进行评测(待完成)
+
+12月26日
+1、增加向量库管理接口：按 exam_name/region 查询、删除/重建、导入进度与去重统计，方便维护题库。
+2、添加纠错提示词，使v3模型获得与v3.2类似的效果
 
 ## 许可证
 

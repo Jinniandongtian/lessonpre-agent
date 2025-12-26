@@ -1,5 +1,6 @@
 """配置管理"""
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -57,4 +58,41 @@ class Config:
         cls.IMAGES_DIR.mkdir(exist_ok=True)
         cls.VECTOR_DB_PATH.mkdir(exist_ok=True)
         cls.PDF_STORAGE_PATH.mkdir(exist_ok=True)
+
+    @classmethod
+    def check_system_dependencies(cls):
+        missing = []
+
+        if shutil.which("tesseract") is None:
+            missing.append("tesseract")
+
+        poppler_ok = any(shutil.which(x) is not None for x in ("pdftoppm", "pdfinfo"))
+        if not poppler_ok:
+            missing.append("poppler")
+
+        weasyprint_ok = True
+        try:
+            from weasyprint import HTML  # noqa: F401
+        except Exception:
+            weasyprint_ok = False
+
+        pdfkit_ok = True
+        try:
+            import pdfkit  # noqa: F401
+            if shutil.which("wkhtmltopdf") is None:
+                pdfkit_ok = False
+        except Exception:
+            pdfkit_ok = False
+
+        if missing:
+            print(f"⚠ 系统依赖缺失：{', '.join(missing)}")
+            if "tesseract" in missing:
+                print("  - OCR 需要 tesseract：macOS 可用 'brew install tesseract tesseract-lang'；Ubuntu 可用 'sudo apt-get install tesseract-ocr'")
+            if "poppler" in missing:
+                print("  - pdf2image 需要 poppler：macOS 可用 'brew install poppler'；Ubuntu 可用 'sudo apt-get install poppler-utils'")
+
+        if not weasyprint_ok and not pdfkit_ok:
+            print("⚠ PDF 导出依赖未就绪：pdfkit(wkhtmltopdf) 与 weasyprint 均不可用，将降级为导出 HTML")
+            print("  - pdfkit: 需要 pip 安装 pdfkit 且系统安装 wkhtmltopdf")
+            print("  - weasyprint: 需要 pip 安装 weasyprint 且系统安装 cairo/pango 等依赖")
 
