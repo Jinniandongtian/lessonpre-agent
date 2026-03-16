@@ -13,6 +13,14 @@ class LLMClient(ABC):
         """生成文本"""
         pass
 
+    def generate_with_image(self, prompt: str, image_base64: str, image_media_type: str = "image/png", **kwargs) -> str:
+        """带图片的多模态生成（默认不支持，子类可覆盖）"""
+        raise NotImplementedError(f"{self.__class__.__name__} 不支持视觉输入，请使用支持视觉的模型客户端")
+
+    def supports_vision(self) -> bool:
+        """是否支持视觉输入"""
+        return False
+
 
 class OpenAIClient(LLMClient):
     """OpenAI / OpenAI 兼容接口客户端"""
@@ -59,6 +67,45 @@ class OpenAIClient(LLMClient):
         except Exception as e:
             return f"[LLM调用失败: {str(e)}]"
 
+    def generate_with_image(self, prompt: str, image_base64: str, image_media_type: str = "image/png", **kwargs) -> str:
+        """带图片的多模态生成（OpenAI 视觉接口）"""
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                http_client=self.http_client,
+            )
+
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{image_media_type};base64,{image_base64}"
+                                },
+                            },
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+                **kwargs
+            )
+            return response.choices[0].message.content
+        except ImportError:
+            raise ImportError("需要安装openai: pip install openai")
+        except Exception as e:
+            return f"[视觉LLM调用失败: {str(e)}]"
+
+    def supports_vision(self) -> bool:
+        """是否支持视觉输入（OpenAI 兼容客户端默认支持，具体取决于模型）"""
+        return True
+
 
 class SiliconFlowClient(OpenAIClient):
     """SiliconFlow DeepSeek 客户端（OpenAI 兼容协议）"""
@@ -77,6 +124,20 @@ class SiliconFlowClient(OpenAIClient):
         super().__init__(api_key=api_key, model=resolved_model, base_url=resolved_base_url)
 
 
+class SiliconFlowVisionClient(SiliconFlowClient):
+    """SiliconFlow 视觉模型客户端，用于识别含数学公式/向量符号的扫描版 PDF"""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
+        # 视觉模型优先读取 SILICONFLOW_VISION_MODEL，默认用 Qwen2.5-VL
+        resolved_model = model or os.getenv("SILICONFLOW_VISION_MODEL", "Qwen/Qwen2.5-VL-72B-Instruct")
+        super().__init__(api_key=api_key, model=resolved_model, base_url=base_url)
+
+
 class MockLLMClient(LLMClient):
     """模拟LLM客户端（用于测试）"""
     
@@ -92,7 +153,7 @@ class MockLLMClient(LLMClient):
 
 # 默认使用Mock客户端，优先读取 SiliconFlow，其次 OpenAI
 def get_default_llm_client() -> LLMClient:
-    """获取默认LLM客户端"""
+    """获取默认文本 LLM 客户端"""
     sf_api_key = os.getenv("SILICONFLOW_API_KEY")
     if sf_api_key:
         return SiliconFlowClient(api_key=sf_api_key)
@@ -102,4 +163,20 @@ def get_default_llm_client() -> LLMClient:
         return OpenAIClient(api_key=api_key)
     
     return MockLLMClient()
+
+
+def get_vision_llm_client() -> Optional[LLMClient]:
+    """
+    获取视觉 LLM 客户端，用于扫描版 PDF 中数学公式/向量符号的识别。
+    优先使用 SiliconFlow 视觉模型（通过 SILICONFLOW_VISION_MODEL 配置模型名称）。
+    若未配置 API Key，返回 None（降级到 Tesseract OCR）。
+
+    .env 配置示例：
+        SILICONFLOW_API_KEY=your_key
+        SILICONFLOW_VISION_MODEL=Qwen/Qwen2.5-VL-72B-Instruct
+    """
+    sf_api_key = os.getenv("SILICONFLOW_API_KEY")
+    if sf_api_key:
+        return SiliconFlowVisionClient(api_key=sf_api_key)
+    return None
 

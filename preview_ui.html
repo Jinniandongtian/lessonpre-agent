@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF识别效果预览 - 备课助手</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .upload-card {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #f8f9ff;
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+        }
+
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: #e8ebff;
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+        }
+
+        .upload-text {
+            font-size: 1.2em;
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .upload-hint {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .options {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .option-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .option-item input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .option-item label {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 20px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .result-card {
+            display: none;
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .result-card.active {
+            display: block;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .result-title {
+            font-size: 1.5em;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .badge-success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .badge-warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .badge-error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .info-item {
+            background: #f8f9ff;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .info-label {
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .info-value {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .issues-section {
+            margin-top: 25px;
+        }
+
+        .issue-item {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .issue-item.error {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+        }
+
+        .issue-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .questions-list {
+            margin-top: 25px;
+        }
+
+        .question-item {
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            transition: all 0.3s;
+        }
+
+        .question-item:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transform: translateY(-2px);
+        }
+
+        .question-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .question-number {
+            font-weight: 700;
+            color: #667eea;
+            font-size: 1.1em;
+        }
+
+        .question-type {
+            background: #667eea;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.85em;
+        }
+
+        .question-content {
+            color: #333;
+            line-height: 1.6;
+            margin-bottom: 10px;
+            white-space: pre-wrap;
+        }
+
+        .question-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 0.85em;
+            color: #666;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-success {
+            background: #28a745;
+        }
+
+        .recommendation {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-top: 20px;
+            font-size: 1.1em;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📚 PDF识别效果预览</h1>
+            <p>上传PDF试卷，实时查看题目提取效果</p>
+        </div>
+
+        <div class="upload-card">
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">📄</div>
+                <div class="upload-text">点击或拖拽PDF文件到这里</div>
+                <div class="upload-hint">支持扫描版和原生PDF，自动识别并提取题目</div>
+                <input type="file" id="fileInput" accept=".pdf" style="display: none;">
+            </div>
+
+            <div class="options">
+                <div class="option-item">
+                    <input type="checkbox" id="ocrEnabled" checked>
+                    <label for="ocrEnabled">启用OCR（扫描版PDF）</label>
+                </div>
+                <div class="option-item">
+                    <input type="checkbox" id="autoMeta" checked>
+                    <label for="autoMeta">自动识别元数据</label>
+                </div>
+                <div class="option-item">
+                    <input type="checkbox" id="regexFallback">
+                    <label for="regexFallback">正则备用方案</label>
+                </div>
+            </div>
+
+            <button class="btn" id="previewBtn" disabled>开始预览</button>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div>正在处理PDF，请稍候...</div>
+            <div style="color: #666; font-size: 0.9em; margin-top: 10px;">这可能需要1-2分钟</div>
+        </div>
+
+        <div class="result-card" id="resultCard">
+            <div class="result-header">
+                <div class="result-title" id="resultTitle">识别结果</div>
+                <div class="badge badge-success" id="resultBadge">✅ 良好</div>
+            </div>
+
+            <div class="info-grid" id="infoGrid"></div>
+
+            <div class="issues-section" id="issuesSection" style="display: none;">
+                <h3 style="margin-bottom: 15px;">⚠️ 发现的问题</h3>
+                <div id="issuesList"></div>
+            </div>
+
+            <div class="recommendation" id="recommendation"></div>
+
+            <div class="questions-list">
+                <h3 style="margin-bottom: 15px;">📝 提取的题目</h3>
+                <div id="questionsList"></div>
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn btn-secondary" onclick="location.reload()">重新上传</button>
+                <button class="btn btn-success" id="confirmUploadBtn">确认无误，正式入库</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        let selectedFile = null;
+        let previewResult = null;
+
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const previewBtn = document.getElementById('previewBtn');
+        const loading = document.getElementById('loading');
+        const resultCard = document.getElementById('resultCard');
+
+        // 点击上传区域
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        // 文件选择
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file && file.type === 'application/pdf') {
+                selectedFile = file;
+                uploadArea.querySelector('.upload-text').textContent = `已选择: ${file.name}`;
+                previewBtn.disabled = false;
+            }
+        });
+
+        // 拖拽上传
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type === 'application/pdf') {
+                selectedFile = file;
+                fileInput.files = e.dataTransfer.files;
+                uploadArea.querySelector('.upload-text').textContent = `已选择: ${file.name}`;
+                previewBtn.disabled = false;
+            }
+        });
+
+        // 预览按钮
+        previewBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            const formData = new FormData();
+            formData.append('pdf_file', selectedFile);
+            formData.append('ocr_enabled', document.getElementById('ocrEnabled').checked);
+            formData.append('auto_meta', document.getElementById('autoMeta').checked);
+            formData.append('use_regex_fallback', document.getElementById('regexFallback').checked);
+
+            loading.classList.add('active');
+            resultCard.classList.remove('active');
+
+            try {
+                const response = await fetch(`${API_BASE}/pdf/preview`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                previewResult = result;
+                displayResult(result);
+            } catch (error) {
+                alert('处理失败: ' + error.message);
+            } finally {
+                loading.classList.remove('active');
+            }
+        });
+
+        // 显示结果
+        function displayResult(result) {
+            resultCard.classList.add('active');
+
+            // 标题和徽章
+            const totalQuestions = result.extraction_info.total_questions;
+            document.getElementById('resultTitle').textContent = `识别到 ${totalQuestions} 道题目`;
+
+            const issues = result.issues || [];
+            const errorCount = issues.filter(i => i.severity === 'error').length;
+            const warningCount = issues.filter(i => i.severity === 'warning').length;
+
+            const badge = document.getElementById('resultBadge');
+            if (errorCount > 0) {
+                badge.className = 'badge badge-error';
+                badge.textContent = `❌ ${errorCount} 个错误`;
+            } else if (warningCount > 0) {
+                badge.className = 'badge badge-warning';
+                badge.textContent = `⚠️ ${warningCount} 个警告`;
+            } else {
+                badge.className = 'badge badge-success';
+                badge.textContent = '✅ 良好';
+            }
+
+            // 信息网格
+            const infoGrid = document.getElementById('infoGrid');
+            infoGrid.innerHTML = `
+                <div class="info-item">
+                    <div class="info-label">提取模式</div>
+                    <div class="info-value">${result.extraction_info.mode === 'ocr' ? '🔍 OCR识别' : '📄 原生提取'}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">题目总数</div>
+                    <div class="info-value">${totalQuestions} 道</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">考试名称</div>
+                    <div class="info-value">${result.meta_info.meta_used.exam_name || '未识别'}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">地区/年级</div>
+                    <div class="info-value">${result.meta_info.meta_used.region || '未知'} / ${result.meta_info.meta_used.grade || '未知'}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Schema合格率</div>
+                    <div class="info-value">${(result.quality_metrics.A2_schema_valid_rate * 100).toFixed(1)}%</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">结构完整率</div>
+                    <div class="info-value">${(result.quality_metrics.A3_structure_complete_rate * 100).toFixed(1)}%</div>
+                </div>
+            `;
+
+            // 问题列表
+            const issuesSection = document.getElementById('issuesSection');
+            const issuesList = document.getElementById('issuesList');
+            if (issues.length > 0) {
+                issuesSection.style.display = 'block';
+                issuesList.innerHTML = issues.map(issue => `
+                    <div class="issue-item ${issue.severity}">
+                        <div class="issue-title">${issue.message}</div>
+                        ${issue.missing_numbers ? `<div style="margin-top: 5px; font-size: 0.9em;">缺失题号: ${issue.missing_numbers.join(', ')}</div>` : ''}
+                    </div>
+                `).join('');
+            } else {
+                issuesSection.style.display = 'none';
+            }
+
+            // 建议
+            document.getElementById('recommendation').textContent = result.recommendation;
+
+            // 题目列表
+            const questionsList = document.getElementById('questionsList');
+            questionsList.innerHTML = result.question_summaries.map(q => `
+                <div class="question-item">
+                    <div class="question-header">
+                        <div class="question-number">题目 ${q.question_number}</div>
+                        <div class="question-type">${q.question_type}</div>
+                    </div>
+                    <div class="question-content">${q.content_preview}</div>
+                    <div class="question-meta">
+                        <span>📏 长度: ${q.content_length} 字符</span>
+                        ${q.knowledge_points.length > 0 ? `<span>📚 知识点: ${q.knowledge_points.join(', ')}</span>` : ''}
+                        ${q.difficulty ? `<span>⭐ 难度: ${q.difficulty}/5</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 确认入库
+        document.getElementById('confirmUploadBtn').addEventListener('click', async () => {
+            if (!selectedFile || !previewResult) return;
+
+            if (!confirm('确认将这些题目正式入库吗？')) return;
+
+            const formData = new FormData();
+            formData.append('pdf_file', selectedFile);
+            formData.append('ocr_enabled', document.getElementById('ocrEnabled').checked);
+            formData.append('auto_meta', document.getElementById('autoMeta').checked);
+            formData.append('use_regex_fallback', document.getElementById('regexFallback').checked);
+
+            // 添加元数据
+            const meta = previewResult.meta_info.meta_used;
+            if (meta.region) formData.append('region', meta.region);
+            if (meta.year) formData.append('year', meta.year);
+            if (meta.grade) formData.append('grade', meta.grade);
+            if (meta.exam_name) formData.append('exam_name', meta.exam_name);
+            if (meta.source_type) formData.append('source_type', meta.source_type);
+
+            loading.classList.add('active');
+
+            try {
+                const response = await fetch(`${API_BASE}/pdf/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                alert(`✅ 入库成功！\n新增题目: ${result.questions_extracted} 道\n去重: ${result.duplicates_removed} 道\n向量库总量: ${result.vector_db_total} 道`);
+                location.reload();
+            } catch (error) {
+                alert('入库失败: ' + error.message);
+            } finally {
+                loading.classList.remove('active');
+            }
+        });
+    </script>
+</body>
+</html>

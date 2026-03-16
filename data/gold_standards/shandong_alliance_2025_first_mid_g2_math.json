@@ -1,0 +1,167 @@
+{
+  "paper_id": "shandong_alliance_2025_first_mid_g2_math",
+  "description": "山东名校考试联盟2025~2026学年第一学期期中 高二数学试题 2025.11",
+  "questions": [
+    {
+      "num": 1,
+      "type": "单选题",
+      "stem": "已知直线 $l$ 的斜率为 $2$，经过点 $(2,1)$，则直线 $l$ 的方程为（　　）",
+      "options": {
+        "A": "$2x-y-5=0$",
+        "B": "$2x+y-5=0$",
+        "C": "$2x-y-3=0$",
+        "D": "$2x+y-3=0$"
+      }
+    },
+    {
+      "num": 2,
+      "type": "单选题",
+      "stem": "已知椭圆 $C:\\dfrac{x^2}{4}+\\dfrac{y^2}{3}=1$ 的左、右焦点分别为 $F_1，F_2$，$P$ 为椭圆 $C$ 上的动点（点 $P$ 不在坐标轴上），则 $\\triangle PF_1F_2$ 的周长为（　　）",
+      "options": {
+        "A": "$4+2\\sqrt{3}$",
+        "B": "$6$",
+        "C": "$2+\\sqrt{3}$",
+        "D": "$3$"
+      }
+    },
+    {
+      "num": 3,
+      "type": "单选题",
+      "stem": "在平行六面体 $ABCD-A_1B_1C_1D_1$ 中，已知点 $A(2,0,0)$，$B(2,2,0)$，$D(0,0,0)$，$D_1(-1,1,1)$，则 $\\overrightarrow{AC_1}=$（　　）",
+      "options": {
+        "A": "$(-3,3,1)$",
+        "B": "$(1,3,1)$",
+        "C": "$(-1,1,-1)$",
+        "D": "$(-3,-1,1)$"
+      }
+    },
+    {
+      "num": 4,
+      "type": "单选题",
+      "stem": "已知直线 $y-4=k(x+3)$ 与圆 $x^2+(y-2)^2=4$ 相交，则实数 $k$ 的取值范围为（　　）",
+      "options": {
+        "A": "$\\left(-\\dfrac{12}{5},0\\right)$",
+        "B": "$\\left(0,\\dfrac{12}{5}\\right)$",
+        "C": "$\\left(-\\infty,-\\dfrac{12}{5}\\right)\\cup(0,+\\infty)$",
+        "D": "$(-\\infty,0)\\cup\\left(\\dfrac{12}{5},+\\infty\\right)$"
+      }
+    },
+    {
+      "num": 5,
+      "type": "单选题",
+      "stem": "在矩形 $ABCD$ 中，$AB=\\sqrt{6}$，$AD=\\sqrt{3}$，将 $\\triangle ACD$ 沿对角线 $AC$ 折起，使得点 $D$ 到达点 $P$ 的位置，若二面角 $P-AC-B$ 的大小为 $\\dfrac{\\pi}{3}$，则 $BP$ 的长度为（　　）",
+      "options": {
+        "A": "$\\sqrt{3}$",
+        "B": "$\\sqrt{5}$",
+        "C": "$\\sqrt{7}$",
+        "D": "$3$"
+      }
+    },
+    {
+      "num": 6,
+      "type": "单选题",
+      "stem": "已知点 $M(-2,3)$ 和圆 $O:x^2+y^2=4$，以 $OM$ 为直径的圆与圆 $O$ 交于 $P，Q$ 两点，则直线 $PQ$ 的方程为（　　）",
+      "options": {
+        "A": "$2x-3y-4=0$",
+        "B": "$2x+3y-4=0$",
+        "C": "$2x-3y+4=0$",
+        "D": "$2x+3y+4=0$"
+      }
+    },
+    {
+      "num": 7,
+      "type": "单选题",
+      "stem": "直线 $l$ 与椭圆 $\\dfrac{x^2}{16}+\\dfrac{y^2}{8}=1$ 交于 $A，B$ 两点，若 $P(-2,1)$ 为线段 $AB$ 的中点，则 $l$ 的斜率为（　　）",
+      "options": {
+        "A": "$-\\sqrt{2}$",
+        "B": "$\\sqrt{2}$",
+        "C": "$-1$",
+        "D": "$1$"
+      }
+    },
+    {
+      "num": 8,
+      "type": "单选题",
+      "stem": "在三棱锥 $O-ABC$ 中，$OA=OB=OC=1$，$AB=BC=CA=\\sqrt{2}$，点 $P$ 满足 $\\overrightarrow{OP}=m\\overrightarrow{OA}+n\\overrightarrow{OB}+l\\overrightarrow{OC}$，若实数 $m，n，l$ 满足 $m+2n+3l=3$，则 $OP$ 的最小值为（　　）",
+      "options": {
+        "A": "$\\sqrt{3}$",
+        "B": "$\\dfrac{3\\sqrt{5}}{5}$",
+        "C": "$\\dfrac{3\\sqrt{7}}{7}$",
+        "D": "$\\dfrac{3\\sqrt{14}}{14}$"
+      }
+    },
+    {
+      "num": 9,
+      "type": "多选题",
+      "stem": "已知平面 $\\alpha$ 的法向量为 $(1,-2,3)$，设平面 $\\beta$ 的法向量为 $\\vec n$，直线 $l$ 的方向向量为 $\\vec v$，则下列结论正确的是（　　）",
+      "options": {
+        "A": "若 $\\vec n=(-2,4,-6)$，则平面 $\\beta\\parallel$ 平面 $\\alpha$",
+        "B": "若 $\\vec v=(-2,4,-6)$，则直线 $l\\parallel$ 平面 $\\alpha$",
+        "C": "若 $\\vec n=(1,2,1)$，则平面 $\\beta\\perp$ 平面 $\\alpha$",
+        "D": "若 $\\vec v=(1,2,1)$，则直线 $l\\perp$ 平面 $\\alpha$"
+      }
+    },
+    {
+      "num": 10,
+      "type": "多选题",
+      "stem": "已知直线 $l:mx-y+1+3m=0$，圆 $C:(x+2)^2+y^2=9$，则（　　）",
+      "options": {
+        "A": "$\\forall m\\in\\mathbb{R}$，$l$ 与 $C$ 相交",
+        "B": "$\\exists m\\in\\mathbb{R}$，使得圆心 $C$ 到 $l$ 的距离为 $\\dfrac{3}{2}$",
+        "C": "$\\exists m\\in\\mathbb{R}$，使得圆 $C$ 截 $l$ 所得的弦长为 $4\\sqrt{2}$",
+        "D": "$\\exists m\\in\\mathbb{R}$，使得圆 $C$ 上有 $4$ 个点到 $l$ 的距离为 $2$"
+      }
+    },
+    {
+      "num": 11,
+      "type": "多选题",
+      "stem": "已知椭圆 $C:\\dfrac{x^2}{a^2}+\\dfrac{y^2}{b^2}=1\\ (a>b>0)$ 的左、右焦点分别为 $F_1，F_2$，点 $A$ 为椭圆的上顶点，直线 $AF_2$ 与 $C$ 的另一个交点为 $B$，过 $F_1$ 与 $AB$ 垂直的直线与 $C$ 交于 $M，N$ 两点，若 $\\cos\\angle AF_1B=\\dfrac{1}{7}$，$|MN|=6$，则（　　）",
+      "options": {
+        "A": "$3|AF_2|=5|BF_2|$",
+        "B": "椭圆 $C$ 的离心率为 $\\dfrac{1}{2}$",
+        "C": "椭圆 $C$ 的方程为 $\\dfrac{x^2}{16}+\\dfrac{y^2}{12}=1$",
+        "D": "$\\triangle AMN$ 的周长为 $13$"
+      }
+    },
+    {
+      "num": 12,
+      "type": "填空题",
+      "stem": "已知椭圆的中心为坐标原点，对称轴为 $x$ 轴，$y$ 轴，且过点 $(0,2)$，$\\left(-\\dfrac{3}{2},1\\right)$ 两点，则椭圆的方程为______。"
+    },
+    {
+      "num": 13,
+      "type": "填空题",
+      "stem": "已知正方体 $ABCD-A_1B_1C_1D_1$ 的棱长为 $2$，$E，F$ 分别为棱 $AA_1，A_1D_1$ 的中点，$\\overrightarrow{BP}=\\lambda\\overrightarrow{BC}$，若 $AP\\parallel$ 平面 $BEF$，则实数 $\\lambda$ 的值为______。"
+    },
+    {
+      "num": 14,
+      "type": "填空题",
+      "stem": "过点 $P(2,1)$ 作圆 $x^2+y^2-ax+ay+a-1=0\\ (a\\in\\mathbb{R})$ 的两条切线，切点分别为 $M，N$，设 $\\theta=\\dfrac{\\angle MPN}{2}$，则 $\\tan\\theta$ 的最小值为______。"
+    },
+    {
+      "num": 15,
+      "type": "解答题",
+      "stem": "已知圆 $C$ 经过 $P(3,0)，Q(0,-1)，R(2,3)$ 三点。\n(1) 求圆 $C$ 的方程；\n(2) 求过点 $(-4,1)$ 且与圆 $C$ 相切的直线方程。"
+    },
+    {
+      "num": 16,
+      "type": "解答题",
+      "stem": "已知椭圆 $C:\\dfrac{x^2}{a^2}+\\dfrac{y^2}{b^2}=1\\ (a>b>0)$ 的左、右焦点分别为 $F_1(-2,0)，F_2(2,0)$，且经过点 $(2,\\sqrt{2})$。\n(1) 求椭圆 $C$ 的方程；\n(2) 倾斜角为 $\\dfrac{\\pi}{4}$ 的直线经过点 $F_2$，且与椭圆 $C$ 交于 $A，B$ 两点，求 $\\triangle F_1AB$ 的面积。"
+    },
+    {
+      "num": 17,
+      "type": "解答题",
+      "stem": "已知正方体 $ABCD-A_1B_1C_1D_1$ 和平面 $\\alpha$，直线 $AC_1\\parallel$ 平面 $\\alpha$，直线 $BD\\parallel$ 平面 $\\alpha$，$O$ 为线段 $B_1D_1$ 的中点。\n(1) 证明：直线 $OC\\perp$ 平面 $\\alpha$；\n(2) 已知 $\\overrightarrow{AP}=t\\overrightarrow{AC_1}$，当直线 $BP$ 与平面 $\\alpha$ 所成角最大时，求 $t$ 的值。"
+    },
+    {
+      "num": 18,
+      "type": "解答题",
+      "stem": "已知椭圆 $C:\\dfrac{x^2}{a^2}+\\dfrac{y^2}{b^2}=1\\ (a>b>0)$ 的左、右焦点分别为 $F_1，F_2$，离心率为 $\\dfrac{\\sqrt{2}}{2}$。设 $A，B$ 是椭圆上位于 $x$ 轴同侧的两点，且直线 $AF_1$ 与直线 $BF_2$ 平行，$AF_2$ 与 $BF_1$ 交于点 $P$，当 $AF_1\\perp x$ 轴时，$|OP|=\\dfrac{\\sqrt{2}}{4}$。\n(1) 求椭圆 $C$ 的方程；\n(2) 若直线 $AF_1$ 的斜率为 $\\dfrac{1}{2}$，求 $|AF_1|+|BF_2|$ 的长度；\n(3) 证明：点 $P$ 在定椭圆上。"
+    },
+    {
+      "num": 19,
+      "type": "解答题",
+      "stem": "在四棱锥 $P-ABCD$ 中，$AB=\\sqrt{3}$，$BC=3$，$\\angle ABC=90^\\circ$，$\\angle BCD=\\angle ADC=60^\\circ$，且 $PA\\perp$ 平面 $ABCD$。\n(1) 证明：$AC\\perp$ 平面 $PAD$；\n(2) 若 $PA=1$，求平面 $PAB$ 与平面 $PCD$ 夹角的余弦值；\n(3) 过点 $A$ 的平面 $\\alpha$ 与侧棱 $PB，PC，PD$ 分别交于点 $E，F，G$，若四边形 $AEFG$ 为菱形，求 $PA$ 的长。"
+    }
+  ]
+}

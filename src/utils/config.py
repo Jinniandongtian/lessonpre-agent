@@ -36,6 +36,8 @@ class Config:
     SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
     SILICONFLOW_BASE_URL = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
     SILICONFLOW_MODEL = os.getenv("SILICONFLOW_MODEL", "deepseek-chat")
+    # 视觉模型（用于扫描版 PDF 中数学公式/向量符号的识别）
+    SILICONFLOW_VISION_MODEL = os.getenv("SILICONFLOW_VISION_MODEL", "Qwen/Qwen2.5-VL-72B-Instruct")
     
     # 导出配置
     EXPORT_DIR = DATA_DIR / "exports"
