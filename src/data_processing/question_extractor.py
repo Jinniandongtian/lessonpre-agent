@@ -58,7 +58,7 @@ class QuestionExtractor:
     def _infer_question_type_heuristic(self, text: str) -> str:
         """启发式题型识别，避免全部落在未知"""
         t = text.lower()
-        has_options = len(self._extract_options_from_content(text)) >= 3
+        has_options = bool(re.search(r'[a-dＡ-Ｄ]\s*[\\.|、|\\)]', t))
         has_blanks = '____' in text or '___' in text or '（）' in text or '()' in text
         if has_options:
             return "选择题"
@@ -244,7 +244,7 @@ class QuestionExtractor:
         
         # 2. 选择题必须包含选项标识（A、B、C、D等）
         # 检查是否包含选项模式
-        has_options = len(self._extract_options_from_content(content)) >= 3
+        has_options = bool(re.search(r'[A-Z][\.、\)]\s*', content))
         
         # 3. 如果看起来像选择题但没有选项，可能不完整
         question_lower = content.lower()
@@ -269,7 +269,6 @@ class QuestionExtractor:
         if not content:
             return None
         c = content.strip()
-        c = re.sub(r"^[\s\u3000\"'“”‘’]+", "", c)
         m = re.match(r'^\s*(\d{1,4})\s*(?:[\.、\)．]|\s+)', c)
         if m:
             try:
@@ -285,13 +284,6 @@ class QuestionExtractor:
         if m:
             return m.group(1)
         return None
-
-    def get_content_text(self, content: Any) -> str:
-        if isinstance(content, dict):
-            return content.get("stem_plain", "") or content.get("stem_latex", "") or ""
-        return str(content or "")
-
-
     # 题目数据结构化字段的自动补全工具，核心目标是「为题目列表中缺失 stem（题干）、options（选项）字段的题目
     def populate_structured_fields(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for q in questions:
@@ -327,20 +319,10 @@ class QuestionExtractor:
         if not content:
             return options
 
-        pattern = (
-            r'(?m)^\s*([A-Da-d])[\.\、\)\uff0e\uff09]\s*(.+?)'
-            r'(?=^\s*[A-Da-d][\.\、\)\uff0e\uff09]\s*'
-            r'|^\s*[一二三四五六七八九十]+[、．]'
-            r'|^\s*\d{1,3}\s*[\.、\)]'
-            r'|^\s*[（(]\s*\d+\s*[）)]'
-            r'|\Z)'
-        )
+        pattern = r'([A-Da-d])[\.\、\)]\s*(.+?)(?=(?:[A-Da-d][\.\、\)]|$))'
         for m in re.finditer(pattern, content, re.DOTALL):
             key = (m.group(1) or "").upper()
             val = (m.group(2) or "").strip()
-            val = re.sub(r'\n\s*[一二三四五六七八九十]+[、．][\s\S]*$', '', val).strip()
-            val = re.sub(r'\n\s*\d{1,3}\s*[\.、\)][\s\S]*$', '', val).strip()
-            val = re.sub(r'(?:\s+要求[\.。：:].*|\s+全部选对.*|\s+部分选对.*|\s+有选错.*)$', '', val).strip()
             if key and val:
                 options[key] = val
 
@@ -352,8 +334,8 @@ class QuestionExtractor:
         c = content.strip()
         return bool(re.match(r'^\s*\(\s*\d+\s*\)\s*', c))
 
-    def _normalize_for_dedupe(self, content: Any) -> str:
-        t = self.get_content_text(content).strip()
+    def _normalize_for_dedupe(self, content: str) -> str:
+        t = (content or "").strip()
         t = re.sub(r"\s+", " ", t)
         t = t.lower()
         t = re.sub(r"[\s\u3000]+", "", t)
@@ -380,7 +362,6 @@ class QuestionExtractor:
     def _is_subquestion_line(self, line: str) -> bool:
         return bool(re.match(r'^\s*[（(]\s*\d+\s*[）)]', line or ""))
 
-    # 用正则识别行首的 1. 2、 3) 这类题目，自动把一大段文本切成一道道独立的题。
     def _extract_question_blocks(self, text: str) -> List[str]:
         if not text:
             return []
@@ -414,10 +395,6 @@ class QuestionExtractor:
         if "学科网" in s and "公司" in s:
             return True
         if re.match(r'^[一二三四五六七八九十]+[、．]\s*(选择题|填空题|解答题|计算题|证明题|应用题)', s):
-            return True
-        if any(kw in s for kw in ["全部选对", "部分选对", "有选错", "每小题", "本题共"]):
-            return True
-        if re.match(r'^要求[\.。：:]', s):
             return True
         return False
     # 根据「前一行文本的结尾特征」和「当前行文本的开头特征」，判断是否需要加空格合并，
@@ -486,7 +463,7 @@ class QuestionExtractor:
         blocks = self._extract_question_blocks(text)
         if not blocks:
             return []
-        print("_extract_questions_rule_based函数中被切分后的题目:\n",blocks)
+
         by_num: Dict[str, Dict[str, Any]] = {}
         for block in blocks:
             content = self._clean_question_block(block)
@@ -672,7 +649,6 @@ class QuestionExtractor:
                 continue
 
         return all_valid
-    
     
     def extract_questions_from_text(
         self,
@@ -968,6 +944,8 @@ class QuestionExtractor:
         if not questions:
             return []
         if not self.llm_client:
+            return questions
+        if str(os.getenv("ENRICH_WITH_LLM", "0")).strip() in {"0", "false", "False", "no", "No"}:
             return questions
 
         previews = []

@@ -16,10 +16,8 @@ class Question:
     content: Dict[str, Any] = field(default_factory=dict)
     # content 结构：
     # {
-    #   "stem_raw":      "原始题干文本",
     #   "stem_latex":    "已知直线 $l$ 的斜率为 $2$，...",
     #   "stem_plain":    "已知直线 l 的斜率为 2，...",
-    #   "options_raw":   {"A": "原始选项A", ...},
     #   "options_latex": {"A": "$2x-y-5=0$", ...},
     #   "options_plain": {"A": "2x-y-5=0", ...}
     # }

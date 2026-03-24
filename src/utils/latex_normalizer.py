@@ -1,7 +1,6 @@
 """LaTeX 规范化器：LLM 规范化 + 正则兜底"""
-import os
 import re
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 
 
 class LaTeXNormalizer:
@@ -113,43 +112,6 @@ class LaTeXNormalizer:
         'overline',
     }
 
-    _TEXT_SYMBOL_TO_LATEX = {
-        '∀': r'\forall',
-        '∃': r'\exists',
-        '∈': r'\in',
-        '∉': r'\notin',
-        '∪': r'\cup',
-        '∩': r'\cap',
-        '⊂': r'\subset',
-        '⊆': r'\subseteq',
-        '⊃': r'\supset',
-        '⊇': r'\supseteq',
-        '⊥': r'\perp',
-        '∥': r'\parallel',
-        '∠': r'\angle',
-        '△': r'\triangle',
-        '∞': r'\infty',
-        '≤': r'\leq',
-        '≥': r'\geq',
-        '≠': r'\neq',
-        '±': r'\pm',
-        '∓': r'\mp',
-        '∴': r'\therefore',
-        '∵': r'\because',
-        'α': r'\alpha',
-        'β': r'\beta',
-        'γ': r'\gamma',
-        'δ': r'\delta',
-        'Δ': r'\Delta',
-        'θ': r'\theta',
-        'λ': r'\lambda',
-        'μ': r'\mu',
-        'π': r'\pi',
-        'σ': r'\sigma',
-        'φ': r'\phi',
-        'ω': r'\omega',
-    }
-
     def normalize_latex(self, latex_text: str) -> str:
         """
         将各种 LaTeX 写法统一为标准形式。
@@ -198,158 +160,6 @@ class LaTeXNormalizer:
         # 多余空格压缩
         t = re.sub(r'\s+', ' ', t).strip()
         return t
-
-    # 让数学符号和字母 / 数字之间自动加空格
-    def _normalize_text_to_latex_spacing(self, text: str) -> str:
-        t = re.sub(
-            r'(\\(?:forall|exists|in|notin|cup|cap|subseteq|subset|supseteq|supset|perp|parallel|angle|triangle|infty|leq|geq|neq|pm|mp|therefore|because|alpha|beta|gamma|delta|Delta|theta|lambda|mu|pi|sigma|phi|omega))(?=[A-Za-z0-9])',
-            r'\1 ',
-            text,
-        )
-        t = re.sub(r'\s+', ' ', t)
-        t = re.sub(r' *\n *', '\n', t)
-        return t.strip()
-
-    # 将普通文本转换为latex格式
-    def _text_to_latex_rule_based(self, text: str) -> str:
-        if not text:
-            return ""
-
-        t = str(text).replace('\r\n', '\n').replace('\r', '\n')
-
-        if "\\" in t:
-            t = self.post_process_latex(t)
-        else:
-            t = re.sub(r'(?<!\\)\{', r'\\{', t)
-            t = re.sub(r'(?<!\\)\}', r'\\}', t)
-            t = re.sub(r'([A-Za-z0-9)\]])²', r'\1^{2}', t)
-            t = re.sub(r'([A-Za-z0-9)\]])³', r'\1^{3}', t)
-            t = re.sub(r'([A-Za-z0-9_]+)\s*→', r'\\overrightarrow{\1}', t)
-            t = re.sub(r'→\s*([A-Za-z0-9_]+)', r'\\overrightarrow{\1}', t)
-            t = re.sub(r'√\s*([A-Za-z0-9_]+)', r'\\sqrt{\1}', t)
-            for symbol, latex in self._TEXT_SYMBOL_TO_LATEX.items():
-                t = t.replace(symbol, latex)
-            t = self.post_process_latex(t)
-
-        return self._normalize_text_to_latex_spacing(t)
-
-    # 检查文本里的括号、大括号是否成对、不缺失、不多余
-    def _has_balanced_delimiters(self, text: str) -> bool:
-        pairs = {'(': ')', '[': ']'}
-        for open_char, close_char in pairs.items():
-            if text.count(open_char) != text.count(close_char):
-                return False
-        if len(re.findall(r'(?<!\\)\{', text)) != len(re.findall(r'(?<!\\)\}', text)):
-            return False
-        return True
-
-    def _collect_text_to_latex_risks(self, raw_text: str, draft_latex: str) -> List[str]:
-        # 存储所有风险标签（比如 "括号不匹配"）
-        risks: List[str] = []
-        raw = raw_text or ""    # 原始文本
-        draft = draft_latex or ""  # 转换后的LaTeX草稿
-
-        # 如果原始文本里 没有任何数字/字母/数学符号 → 直接无风险
-        if not re.search(r'[0-9A-Za-zα-ωΑ-Ω+\-*/=<>≤≥≠√∈∉∪∩∥⊥∠→πλμθ{}[\]()]', raw):
-            return risks
-
-        # 【可疑模式列表】：出现这些，大概率是OCR识别错 / 格式乱
-        suspicious_patterns = [
-            r'\|\|',       # 双竖线
-            r'ð',          # 奇怪字符
-            r'\^\+',       # 错误上标
-            r'\+\+',       # 双重加号
-            r'[A-Za-z0-9]/\|', # 奇怪分式
-            r'\| x \|',    # 奇怪绝对值
-            r'[=<>]\s*0\b',# 错误等号格式
-            r'\b\d+\s+\d+\b', # 数字中间有空格（可能是分数被拆了）
-        ]
-        # 命中任意一个 → 标记可疑
-        if any(re.search(pat, raw) for pat in suspicious_patterns):
-            risks.append("suspicious_raw_pattern")
-
-        # 【括号配对检查】（调用你刚学的方法）
-        if not self._has_balanced_delimiters(raw):
-            risks.append("raw_unbalanced_delimiters")
-        if not self._has_balanced_delimiters(draft):
-            risks.append("draft_unbalanced_delimiters")
-
-        # 【危险检查】LaTeX里居然还残留中文Unicode符号（说明没转干净）
-        if re.search(r'[∀∃∈∉∪∩⊂⊆⊃⊇⊥∥∠△∞≤≥≠±∓∴∵αβγδΔθλμπσφω]', draft):
-            risks.append("unicode_symbol_left_in_draft")
-
-        # 【集合大括号丢失】原始有 {x|x>0}，但LaTeX里没保住 { → 风险
-        if re.search(r'(?<!\\)\{[^{}]*[|∣][^{}]*\}', raw) and r'\{' not in draft:
-            risks.append("set_brace_not_preserved")
-
-        # 【多子题风险】文本短，但包含 (1) (2) 多个子问题 → 容易解析混乱
-        if len(raw) <= 1200 and len(re.findall(r'[（(]\d+[）)]', raw)) >= 2:
-            risks.append("multi_subquestion_math_text")
-
-        # 返回所有风险标签
-        return risks
-
-    def _should_use_llm_for_text_to_latex(self, raw_text: str, draft_latex: str) -> bool:
-        # 1. 没有配置大模型客户端 → 绝对不调用
-        if self.llm_client is None:
-            return False
-
-        # 2. 环境变量关闭了AI fallback → 不调用
-        enabled = str(os.getenv("TEXT_TO_LATEX_LLM_FALLBACK", "1")).strip().lower()
-        if enabled in {"0", "false", "no"}:
-            return False
-
-        # 3. 文本太长（超过1200字符）→ 不调用（省钱+防超时）
-        if len(raw_text or "") > int(os.getenv("TEXT_TO_LATEX_LLM_MAX_LEN", "1200")):
-            return False
-
-        # 4. 【核心！】检查之前的风险列表 → 有风险就调用AI
-        # 风险：括号不匹配、符号错乱、格式可疑、多子题等
-        return bool(self._collect_text_to_latex_risks(raw_text, draft_latex))
-
-    def _repair_text_to_latex_with_llm(self, raw_text: str, draft_latex: str) -> str:
-        # 1. 没有AI客户端 → 直接返回草稿，不修复
-        if self.llm_client is None:
-            return draft_latex
-
-        # 2. 【核心】给AI发的指令（超级严谨）
-        prompt = (
-            "请将下面数学题面中的数学表达修正为规范 LaTeX，并保持中文原文、句式、标点、换行不变。\n"
-            "要求：\n"
-            "1. 只修正数学表达，不要改写题意，不要补不存在的信息。\n"
-            "2. 集合花括号写成 \\{ \\}；分数写成 \\frac{a}{b}；根号写成 \\sqrt{}；向量写成 \\overrightarrow{AB}。\n"
-            "3. 若某段内容无法确定，请保留原文，不要猜。\n"
-            "4. 只输出修正后的完整文本，不要解释。\n\n"
-            f"原文：\n{raw_text}\n\n"
-            f"规则草稿：\n{draft_latex}\n"
-        )
-
-        # 3. 调用AI，尝试修复
-        try:
-            repaired = self.llm_client.generate(prompt).strip()
-            # 修复成功且结果正常 → 返回AI修复版
-            if repaired and not repaired.startswith("["):
-                return repaired
-        except Exception as e:
-            # AI崩了/超时/报错 → 打印日志，返回草稿
-            print(f"LLM text_to_latex 修复失败: {e}，保留规则结果")
-
-        # 4. 兜底：任何情况失败，都退回规则草稿（保证系统不崩）
-        return draft_latex
-
-    def text_to_latex(self, text: str) -> str:
-        """
-        将原始数学文本转换为 LaTeX。
-        规则优先；仅在规则结果低置信度时，才调用 LLM 做保守修复。
-        """
-        if not text:
-            return ""
-        raw_text = str(text).replace('\r\n', '\n').replace('\r', '\n').strip()
-        draft_latex = self._text_to_latex_rule_based(raw_text)
-        if self._should_use_llm_for_text_to_latex(raw_text, draft_latex):
-            repaired = self._repair_text_to_latex_with_llm(raw_text, draft_latex)
-            return self._normalize_text_to_latex_spacing(repaired)
-        return draft_latex
 
     def _read_balanced(self, text: str, start: int, open_char: str, close_char: str):
         """读取成对括号内的原始内容，支持嵌套。"""
@@ -549,7 +359,7 @@ class LaTeXNormalizer:
 
             if ch == '{':
                 inner, pos = self._read_balanced(text, i, '{', '}')
-                result.append("{" + self._convert_latex_fragment(inner) + "}")
+                result.append(self._convert_latex_fragment(inner))
                 i = pos
                 if stop_after_token:
                     break
@@ -572,13 +382,6 @@ class LaTeXNormalizer:
                 continue
 
             if ch == '_':
-                blank_match = re.match(r'_{2,}', text[i:])
-                if blank_match:
-                    result.append(blank_match.group(0))
-                    i += len(blank_match.group(0))
-                    if stop_after_token:
-                        break
-                    continue
                 token, pos = self._read_argument_plain(text, i + 1)
                 result.append(self._format_subscript(token))
                 i = pos

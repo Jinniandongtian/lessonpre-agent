@@ -140,49 +140,6 @@ class TestLaTeXNormalizer:
         assert "```" not in result
         assert result.count("2x - 3y - 4 = 0") == 1
 
-    def test_latex_to_plain_preserves_fill_in_blanks(self):
-        result = self.n.latex_to_plain("则椭圆的方程为_____.")
-        assert "_____" in result
-        assert "_(_)" not in result
-
-    def test_latex_to_plain_preserves_literal_set_braces(self):
-        result = self.n.latex_to_plain("已知集合A={1,2,3}，B={x | x>0}")
-        assert "{1,2,3}" in result
-        assert "{x | x>0}" in result
-
-    def test_text_to_latex_converts_symbols_and_escapes_set_braces(self):
-        result = self.n.text_to_latex("已知集合A={1,2,3}，x∈A，AB→⊥平面α")
-        assert r"\{1,2,3\}" in result
-        assert r"\in" in result
-        assert r"\overrightarrow{AB}" in result
-        assert r"\perp" in result
-        assert r"\alpha" in result
-
-    def test_text_to_latex_uses_rule_based_path_for_clean_input(self):
-        class FailLLM:
-            def generate(self, prompt):
-                raise AssertionError("clean input should not invoke llm")
-
-        n = LaTeXNormalizer(llm_client=FailLLM())
-        result = n.text_to_latex("已知集合A={1,2,3}，x∈A")
-        assert r"\{1,2,3\}" in result
-        assert r"\in A" in result
-
-    def test_text_to_latex_uses_llm_only_for_suspicious_input(self):
-        class FakeLLM:
-            def __init__(self):
-                self.called = 0
-
-            def generate(self, prompt):
-                self.called += 1
-                return r"已知集合A=\{x \mid x-3 > 1\}"
-
-        llm = FakeLLM()
-        n = LaTeXNormalizer(llm_client=llm)
-        result = n.text_to_latex("已知集合A={x || x-3 ∣ 1}")
-        assert llm.called == 1
-        assert r"\{x \mid x-3 > 1\}" in result
-
     def test_build_embedding_text_removes_punctuation(self):
         stem = r"已知直线 $l$ 的斜率为 $2$，经过点 $(2,1)$"
         options = {"A": "$2x-y-5=0$", "B": "$2x+y-5=0$"}

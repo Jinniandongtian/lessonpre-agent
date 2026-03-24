@@ -7,7 +7,7 @@ from .question_extractor import QuestionExtractor
 from .question_enricher import enrich_question_with_representations, _split_stem_and_options
 from .meta_extractor import ExamMetaExtractor
 
-# 原生和扫描版都走的函数
+
 def process_pdf_to_questions(
     pdf_path: str,
     meta: Dict[str, Any],
@@ -27,7 +27,6 @@ def process_pdf_to_questions(
 
     # 1) 全文提取与清洗（只做一次 OCR，避免重复调用视觉模型）
     text = processor.extract_text(pdf_path)
-    print("process_pdf_to_questions函数中新鲜提取出来的text:\n",text)
     text = processor.clean_text(text)
 
     meta_report = {"meta": {}, "confidence": {}, "evidence": {}}
@@ -54,11 +53,6 @@ def process_pdf_to_questions(
 
     extractor = QuestionExtractor(llm_client=llm_client)
     questions = extractor.extract_questions_from_text(text, meta_merged)
-    
-    # 调试代码
-    print("pdf提取出的原问题文本如下：\n")
-    for q in questions:
-        print(q,'\n')
 
     if getattr(processor, "last_extraction_mode", None) == "native":
         questions = extractor.populate_structured_fields(questions)
