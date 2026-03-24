@@ -174,7 +174,11 @@ SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3.2
 VISION_MODEL=Qwen/Qwen2.5-VL-72B-Instruct
 
 # Embedding 模型
+# 同时配置 EMBEDDING_MODEL 和 SILICONFLOW_API_KEY 时，优先使用 SiliconFlow 远端 embedding
 EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
+# 如果未配置远端 embedding，则回退到本地 sentence-transformers
+# 本地模型名在代码中通过 EmbeddingModel(model_name=...) 传入
+# 不传时默认使用 sentence-transformers/all-MiniLM-L6-v2
 
 # 可选：启用题目丰富化（会增加LLM调用次数）
 # ENRICH_WITH_LLM=1

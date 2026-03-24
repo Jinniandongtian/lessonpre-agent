@@ -14,7 +14,10 @@ from datetime import datetime
 
 from ..utils.config import Config
 from ..utils.llm_client import get_default_llm_client, get_vision_llm_client
-from ..data_processing.pdf_processor import process_pdf_to_questions
+from ..utils.latex_normalizer import LaTeXNormalizer
+from ..utils.description_generator import DescriptionGenerator
+from ..data_processing.pdf_processor import process_pdf_to_questions, enrich_question_with_representations
+from ..data_processing.question_extractor import QuestionExtractor
 from ..vector_store.embedding import EmbeddingModel
 from ..vector_store.vector_db import VectorDatabase
 from ..agents.rag_handout_agent import RAGHandoutAgent
@@ -31,6 +34,8 @@ vision_llm_client = None
 vector_db = None
 embedding_model = None
 rag_agent = None
+normalizer: Optional[LaTeXNormalizer] = None
+desc_generator: Optional[DescriptionGenerator] = None
 
 
 def _append_import_history(record: Dict[str, Any]) -> None:
@@ -46,6 +51,7 @@ def _append_import_history(record: Dict[str, Any]) -> None:
 def init_agents():
     """初始化所有Agent（延迟初始化）"""
     global llm_client, vision_llm_client, vector_db, embedding_model, rag_agent
+    global normalizer, desc_generator
     try:
         llm_client = get_default_llm_client()
         vision_llm_client = get_vision_llm_client()
@@ -58,6 +64,8 @@ def init_agents():
             vector_db=vector_db,
             embedding_model=embedding_model
         )
+        normalizer = LaTeXNormalizer(llm_client)
+        desc_generator = DescriptionGenerator(llm_client)
         print("✓ 所有Agent初始化成功")
         print(f"✓ 向量库中有 {vector_db.count()} 道题目")
     except Exception as e:
@@ -120,7 +128,6 @@ async def upload_pdf_exam(
     # ✅ 新增：自动识别元数据
     auto_meta: bool = Form(True),
     meta_pages: int = Form(2),  # 只取前N页做元数据识别（建议 1~2）
-
     ocr_enabled: bool = Form(True),
 ):
     """
@@ -136,47 +143,10 @@ async def upload_pdf_exam(
     if vector_db is None or embedding_model is None:
         raise HTTPException(status_code=500, detail="服务未正确初始化，请检查日志")
 
+    pdf_path: Optional[Path] = None
+    question_helper = QuestionExtractor()
+
     try:
-        # 题目内容的标准化工具
-        def _normalize_question_content(text: str) -> str:
-            t = (text or "").strip()
-            t = re.sub(r"^\s*\(?\s*\d+\s*\)?\s*[\.、]\s*", "", t)
-            t = re.sub(r"\s+", " ", t)
-            t = t.lower()
-            t = re.sub(r"[\s\u3000]+", "", t)
-            t = re.sub(r"[，,。\.；;：:！!？?（）()【】\[\]《》<>“”\"'‘’、]", "", t)
-            return t
-
-        def _extract_question_number(text: str) -> Optional[str]:
-            if not text:
-                return None
-            c = (text or "").strip()
-            # 常见噪声：开头引号/空白/特殊符号
-            c = re.sub(r"^[\s\u3000\"'“”‘’]+", "", c)
-            m = re.match(r"^(\d{1,4})\s*(?:[\.、\)．]|\s+)", c)
-            if m:
-                try:
-                    n = int(m.group(1))
-                except Exception:
-                    return None
-                if 1900 <= n <= 2100:
-                    return None
-                if n <= 0 or n > 200:
-                    return None
-                return str(n)
-            m = re.match(r"^\(\s*(\d{1,4})\s*\)\s*", c)
-            if m:
-                try:
-                    n = int(m.group(1))
-                except Exception:
-                    return None
-                if 1900 <= n <= 2100:
-                    return None
-                if n <= 0 or n > 200:
-                    return None
-                return str(n)
-            return None
-
         # 1. 保存上传的PDF
         file_ext = Path(pdf_file.filename).suffix.lower()
         if file_ext != ".pdf":
@@ -206,46 +176,26 @@ async def upload_pdf_exam(
         print(f"开始处理PDF: {pdf_filename}")
         print(f"PDF文件大小: {pdf_path.stat().st_size / 1024:.2f} KB")
 
-        # 3. 调用 pdf 处理（兼容新旧 process_pdf_to_questions 返回类型）
-        result = None
-        try:
-            # 如果你已经按方案给 process_pdf_to_questions 加了 auto_meta/meta_pages 参数
-            result = process_pdf_to_questions(
-                pdf_path=str(pdf_path),
-                meta=user_meta,
-                ocr_enabled=ocr_enabled,
-                llm_client=llm_client,
-                vision_llm_client=vision_llm_client,
-                auto_meta=auto_meta,
-                meta_pages=meta_pages,
-            )
-        except TypeError:
-            # 兼容旧版本签名（还没加 auto_meta/meta_pages）
-            result = process_pdf_to_questions(
-                pdf_path=str(pdf_path),
-                meta=user_meta,
-                ocr_enabled=ocr_enabled,
-                llm_client=llm_client,
-                vision_llm_client=vision_llm_client,
+        result = process_pdf_to_questions(
+            pdf_path=str(pdf_path),
+            meta=user_meta,
+            ocr_enabled=ocr_enabled,
+            llm_client=llm_client,
+            vision_llm_client=vision_llm_client,
+            auto_meta=auto_meta,
+            meta_pages=meta_pages,
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                f"process_pdf_to_questions 返回格式错误: {type(result).__name__}"
             )
 
-        # 4. 统一解析 result
-        # - 新版：result 是 dict: {"questions":..., "meta_used":..., "meta_confidence":...}
-        # - 旧版：result 是 list[question]
-        if isinstance(result, dict):
-            questions = result.get("questions", []) or []
-            meta_used = result.get("meta_used", user_meta) or user_meta
-            meta_inferred = result.get("meta_inferred", {}) or {}
-            meta_confidence = result.get("meta_confidence", {}) or {}
-            meta_evidence = result.get("meta_evidence", {}) or {}
-            text_extraction = result.get("text_extraction", None)
-        else:
-            questions = result or []
-            meta_used = user_meta
-            meta_inferred = {}
-            meta_confidence = {}
-            meta_evidence = {}
-            text_extraction = None
+        questions = result.get("questions", []) or []
+        meta_used = result.get("meta_used", user_meta) or user_meta
+        meta_inferred = result.get("meta_inferred", {}) or {}
+        meta_confidence = result.get("meta_confidence", {}) or {}
+        meta_evidence = result.get("meta_evidence", {}) or {}
+        text_extraction = result.get("text_extraction", None)
 
         # 5. 如果 meta 仍不完整，给一个兜底 exam_name（避免下游存储缺字段）
         #    注意：这个兜底不会覆盖用户/自动识别的 exam_name
@@ -276,14 +226,14 @@ async def upload_pdf_exam(
             content = q.get("content", "")
 
             # 优先使用“pdf_hash + 题号”作为稳定 id（OCR 噪声/空格变化不会影响）
-            qnum = _extract_question_number(content)
+            qnum = question_helper._extract_question_number(content)
             stable_id = f"{pdf_hash}:{qnum}" if qnum else None
 
             # fallback：无题号才退回到内容归一化 hash
             if stable_id:
                 dedupe_key = stable_id
             else:
-                key_src = _normalize_question_content(content)
+                key_src = question_helper._normalize_for_dedupe(content)
                 dedupe_key = f"{pdf_hash}:h:{hashlib.md5(key_src.encode('utf-8')).hexdigest()}"
 
             if dedupe_key in seen_keys:
@@ -291,7 +241,7 @@ async def upload_pdf_exam(
                 internal_duplicates.append({
                     "reason": "internal_exact",
                     "dedupe_key": dedupe_key,
-                    "content_preview": (content or "")[:160],
+                    "content_preview": question_helper.get_content_text(content)[:160],
                 })
                 continue
             seen_keys.add(dedupe_key)
@@ -344,7 +294,7 @@ async def upload_pdf_exam(
                     db_existing_duplicates.append({
                         "reason": "db_existing_id",
                         "id": qid,
-                        "content_preview": (q.get("content") or "")[:160],
+                        "content_preview": question_helper.get_content_text(q.get("content") or "")[:160],
                     })
                     continue
                 filtered.append(q)
@@ -369,8 +319,19 @@ async def upload_pdf_exam(
         embeddings: list = []
         if questions:
             print(f"为 {len(questions)} 道题目生成向量...")
-            question_contents = [q["content"] for q in questions]
-            embeddings = embedding_model.encode(question_contents)
+            if normalizer is None or desc_generator is None:
+                raise RuntimeError("题目表示增强器未初始化，无法按新格式入库")
+
+            enriched = []
+            for q in questions:
+                enriched_q = enrich_question_with_representations(
+                    q, llm_client, normalizer, desc_generator
+                )
+                # 保留原始题目的 id（enrich 函数已写入，但以防万一）
+                enriched_q["id"] = q.get("id", enriched_q.get("id", ""))
+                enriched.append(enriched_q)
+            questions = enriched
+            embeddings = [embedding_model.encode_question(q) for q in questions]
 
             enable_similarity = str(os.getenv("DEDUPE_SIMILARITY", "1")).strip().lower() not in {"0", "false", "no"}
             try:
@@ -387,15 +348,17 @@ async def upload_pdf_exam(
                 filtered_e = []
                 # 遍历题目和向量
                 for q, emb in zip(questions, embeddings):
-                    new_norm = _normalize_question_content(q.get("content", ""))
+                    new_norm = question_helper._normalize_for_dedupe(q.get("content", ""))
                     best = None
                     try:
                         # 从向量库搜索Top3相似题目（平衡精度和性能）
                         candidates = vector_db.search(query_embedding=emb, top_k=3)
-                    except Exception:
-                        candidates = []
+                    except Exception as search_error:
+                        raise RuntimeError(
+                            f"相似度去重检索失败，已中止本次导入: {search_error!r}"
+                        ) from search_error
                     for meta, sim in candidates:
-                        old_norm = _normalize_question_content(meta.get("content", ""))
+                        old_norm = question_helper._normalize_for_dedupe(meta.get("content", ""))
                         if not new_norm or not old_norm:
                             continue
                         # # 计算文本层面的相似度（difflib）
@@ -404,7 +367,7 @@ async def upload_pdf_exam(
                             "match_id": meta.get("id"),
                             "embedding_similarity": float(sim), # 向量余弦相似度
                             "text_similarity": float(tr), # 文本层面的相似度
-                            "match_preview": (meta.get("content") or "")[:160],
+                            "match_preview": question_helper.get_content_text(meta.get("content") or "")[:160],
                         }
                         if best is None or (item["text_similarity"], item["embedding_similarity"]) > (best["text_similarity"], best["embedding_similarity"]):
                             best = item
@@ -413,7 +376,7 @@ async def upload_pdf_exam(
                         similarity_duplicates.append({
                             "reason": "similarity",
                             "id": q.get("id"),
-                            "content_preview": (q.get("content") or "")[:160],
+                            "content_preview": question_helper.get_content_text(q.get("content") or "")[:160],
                             **best,
                         })
                         continue
@@ -479,20 +442,25 @@ async def upload_pdf_exam(
             "duplicates_removed": duplicates_removed_total,
             "dedupe_report": dedupe_report,
             "vector_db_total": vector_db.count(),
-
             "text_extraction": text_extraction,
 
             # ✅ 新增：把元数据结果返回给前端/调用方，方便确认与回流
-            "meta_used": meta_used,
-            "meta_inferred": meta_inferred,
-            "meta_confidence": meta_confidence,
-            "needs_confirmation": needs_confirmation,
-            "meta_evidence": meta_evidence,
+            # "meta_used": meta_used,
+            # "meta_inferred": meta_inferred,
+            # "meta_confidence": meta_confidence,
+            # "needs_confirmation": needs_confirmation,
+            # "meta_evidence": meta_evidence,
         }
 
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"处理失败: {repr(e)}")
+    finally:
+        if pdf_path and pdf_path.exists():
+            try:
+                os.remove(pdf_path)
+            except Exception as cleanup_error:
+                print(f"⚠ 清理临时PDF失败: {cleanup_error}")
 
 
 @app.post("/lesson/handout")
@@ -935,7 +903,7 @@ async def preview_pdf_extraction(
             question_summaries.append({
                 "index": i + 1,
                 "question_number": qnum,
-                "question_type": q.get("question_type", "未知"),
+                "question_type": q.get("question_meta").get("question_type",""),
                 "content_preview": preview,
                 "content_length": len(content),
                 "knowledge_points": q.get("knowledge_points", []),
@@ -985,7 +953,7 @@ async def preview_pdf_extraction(
         # 3. 选择题缺少选项
         incomplete_choices = []
         for i, q in enumerate(questions):
-            if q.get("question_type") == "选择题":
+            if q.get("question_meta").get("question_type","") == "选择题":
                 content = q.get("content", "")
                 # 检查是否包含A、B、C、D选项
                 has_options = bool(re.search(r'[A-D][\.、\)]\s*', content))

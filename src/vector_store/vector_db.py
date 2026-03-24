@@ -13,17 +13,9 @@ except ImportError:
     FAISS_AVAILABLE = False
     print("警告：FAISS未安装，将使用简单的内存存储。建议安装: pip install faiss-cpu")
 
-try:
-    import chromadb
-    CHROMA_AVAILABLE = True
-except Exception as e:
-    # 容错：当chromadb依赖（如onnxruntime）缺失或不兼容时，禁用chroma
-    print(f"警告：Chroma不可用，原因: {e}")
-    CHROMA_AVAILABLE = False
-
 
 class VectorDatabase:
-    """向量数据库：支持FAISS和Chroma"""
+    """向量数据库：使用FAISS，缺失时降级为简单内存存储"""
     
     def __init__(
         self,
@@ -33,25 +25,22 @@ class VectorDatabase:
         """
         Args:
             storage_path: 存储路径
-            backend: 后端类型，"faiss" 或 "chroma"
+            backend: 后端类型，仅支持 "faiss"；缺失 FAISS 时自动降级为 "simple"
         """
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.backend = backend
-        
+
+        if backend not in {"faiss", "simple"}:
+            raise ValueError(f"不支持的向量库后端: {backend}")
+
         if backend == "faiss":
             if not FAISS_AVAILABLE:
                 print("FAISS不可用，使用简单内存存储")
                 backend = "simple"
             else:
                 self._init_faiss()
-        elif backend == "chroma":
-            if not CHROMA_AVAILABLE:
-                print("Chroma不可用，使用简单内存存储")
-                backend = "simple"
-            else:
-                self._init_chroma()
-        
+
         if backend == "simple":
             self._init_simple()
     
@@ -64,15 +53,6 @@ class VectorDatabase:
         self.metadata_path = self.storage_path / "metadata.json"
         self.index_path = self.storage_path / "index.faiss"
         self._load_faiss()
-    
-    def _init_chroma(self):
-        """初始化Chroma"""
-        self.backend = "chroma"
-        self.client = chromadb.PersistentClient(path=str(self.storage_path))
-        self.collection = self.client.get_or_create_collection(
-            name="questions",
-            metadata={"description": "数学题目向量库"}
-        )
     
     def _init_simple(self):
         """初始化简单内存存储（备用方案）"""
@@ -112,21 +92,84 @@ class VectorDatabase:
         """获取向量库中已存在的 ids（用于写入前去重/避免重复生成向量）"""
         if not ids:
             return set()
-        if self.backend in {"faiss", "simple"}:
-            existing = set()
-            for m in (self.metadata or []):
-                if isinstance(m, dict):
-                    mid = m.get("id")
-                    if mid:
-                        existing.add(mid)
-            return existing.intersection(set(ids))
-        if self.backend == "chroma":
-            try:
-                existing = self.collection.get(ids=ids)
-                return set(existing.get("ids") or [])
-            except Exception:
-                return set()
-        return set()
+        existing = set()
+        for m in (self.metadata or []):
+            if isinstance(m, dict):
+                mid = m.get("id")
+                if mid:
+                    existing.add(mid)
+        return existing.intersection(set(ids))
+
+    def _build_storage_record(self, q: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将新格式 Question 字典投影为向量库存储结构。
+
+        仅支持当前系统的新格式：
+        {
+          "id": str,
+          "embedding_text": str,
+          "content": dict,
+          "source_meta": dict,
+          "question_meta": {
+              "question_type": str,
+              "difficulty": int,
+              "knowledge_points": list[str],
+          },
+          "description": Optional[str],
+        }
+        """
+        if not isinstance(q, dict):
+            raise ValueError("题目必须是 dict")
+
+        question_id = str(q.get("id") or "").strip()
+        if not question_id:
+            raise ValueError("题目缺少 id")
+
+        embedding_text = q.get("embedding_text", "")
+        if not isinstance(embedding_text, str):
+            raise ValueError("题目 embedding_text 必须是字符串")
+
+        content = q.get("content")
+        if not isinstance(content, dict):
+            raise ValueError("题目 content 必须是 dict（仅支持新格式）")
+
+        source_meta = q.get("source_meta", {})
+        if not isinstance(source_meta, dict):
+            raise ValueError("题目 source_meta 必须是 dict")
+
+        question_meta = q.get("question_meta", {})
+        if not isinstance(question_meta, dict):
+            raise ValueError("题目 question_meta 必须是 dict（仅支持新格式）")
+
+        # 校验 question_meta 内部字段类型
+        qt = question_meta.get("question_type", "")
+        if qt is not None and not isinstance(qt, str):
+            question_meta["question_type"] = str(qt)
+
+        kp = question_meta.get("knowledge_points", [])
+        if kp is None:
+            question_meta["knowledge_points"] = []
+        elif not isinstance(kp, list):
+            raise ValueError("题目 question_meta.knowledge_points 必须是列表")
+
+        diff = question_meta.get("difficulty", 3)
+        if isinstance(diff, bool) or not isinstance(diff, (int, float)):
+            raise ValueError("题目 question_meta.difficulty 必须是数值")
+        else:
+            question_meta["difficulty"] = int(diff)
+
+        description = q.get("description")
+        if description is not None and not isinstance(description, str):
+            description = str(description)
+
+        return {
+            "id": question_id,
+            "embedding_text": embedding_text,
+            "content": content,
+            "source_meta": source_meta,
+            "question_meta": question_meta,
+            "description": description,
+        }
 
     # 返回meta中的source_meta字段，确保返回值一定是字典
     def _get_source_meta(self, meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -191,69 +234,32 @@ class VectorDatabase:
         include_content: bool = False,
     ) -> Dict[str, Any]:
         filters = filters or {}
-
-        if self.backend == "chroma":
-            try:
-                res = self.collection.get(include=["documents", "metadatas"])
-                docs = res.get("documents") or []
-                metas = res.get("metadatas") or []
-                ids = res.get("ids") or []
-
-                matched = []
-                for _id, doc, md in zip(ids, docs, metas):
-                    m = {"id": _id, "content": doc, **(md or {})}
-                    if self._match_source_meta_filters(m, filters):
-                        matched.append(m)
-
-                total = len(matched)
-                sliced = matched[offset: offset + limit]
-                items: List[Dict[str, Any]] = []
-                for m in sliced:
-                    item = {
-                        "id": m.get("id"),
-                        "question_type": m.get("question_type", ""),
-                        "knowledge_points": m.get("knowledge_points", []),
-                        "difficulty": m.get("difficulty", 3),
-                        "source_meta": self._get_source_meta(m),
-                    }
-                    content = m.get("content", "")
-                    if include_content:
-                        item["content"] = content
-                    else:
-                        item["content_preview"] = (content or "")[:200]
-                    items.append(item)
-                return {"total": total, "items": items}
-            except Exception:
-                return {"total": 0, "items": []}
-
-        if self.backend in {"faiss", "simple"}:
-            # 待筛选的原始数据源，（预处理后的有效元数据列表）
-            metas = [m for m in (self.metadata or []) if isinstance(m, dict)]
-            # 符合过滤条件的全量题目列表
-            matched = [m for m in metas if self._match_source_meta_filters(m, filters)]
-            # 符合过滤条件的题目总数
-            total = len(matched)
-            # 分页后的当前页题目列表
-            sliced = matched[offset: offset + limit]
-            items: List[Dict[str, Any]] = []
-            for m in sliced:
-                item = {
-                    "id": m.get("id"),
-                    "question_type": m.get("question_type", ""),
-                    "knowledge_points": m.get("knowledge_points", []),
-                    "difficulty": m.get("difficulty", 3),
-                    "source_meta": self._get_source_meta(m),
-                }
-                content = m.get("content", "")
-                # 如果需要返回完整内容
-                if include_content:
-                    item["content"] = content
-                else:
-                    item["content_preview"] = (content or "")[:200]
-                items.append(item)
-            return {"total": total, "items": items}
-
-        return {"total": 0, "items": []}
+        # 待筛选的原始数据源，（预处理后的有效元数据列表）
+        metas = [m for m in (self.metadata or []) if isinstance(m, dict)]
+        # 符合过滤条件的全量题目列表
+        matched = [m for m in metas if self._match_source_meta_filters(m, filters)]
+        # 符合过滤条件的题目总数
+        total = len(matched)
+        # 分页后的当前页题目列表
+        sliced = matched[offset: offset + limit]
+        items: List[Dict[str, Any]] = []
+        for m in sliced:
+            qm = m.get("question_meta", {})
+            item = {
+                "id": m.get("id"),
+                "question_type": qm.get("question_type", ""),
+                "knowledge_points": qm.get("knowledge_points", []),
+                "difficulty": qm.get("difficulty", 3),
+                "source_meta": self._get_source_meta(m),
+            }
+            content = m.get("content", "")
+            # 如果需要返回完整内容
+            if include_content:
+                item["content"] = content
+            else:
+                item["content_preview"] = (content or "")[:200]
+            items.append(item)
+        return {"total": total, "items": items}
 
     # 按指定元数字段（如地区 / 年份 / 年级）分组，
     # 统计每个分组下符合过滤条件的题目数量，最终返回按数量降序排列的前 top_k 个分组结果
@@ -266,33 +272,15 @@ class VectorDatabase:
     ) -> List[Dict[str, Any]]:
         filters = filters or {}
         counts: Dict[str, int] = defaultdict(int)
-
-        if self.backend == "chroma":
-            try:
-                res = self.collection.get(include=["documents", "metadatas"])
-                docs = res.get("documents") or []
-                metas = res.get("metadatas") or []
-                ids = res.get("ids") or []
-                for _id, doc, md in zip(ids, docs, metas):
-                    m = {"id": _id, "content": doc, **(md or {})}
-                    if not self._match_source_meta_filters(m, filters):
-                        continue
-                    sm = self._get_source_meta(m)
-                    key = sm.get(group_by) if group_by in sm else None
-                    key = str(key or "").strip() or "(empty)"
-                    counts[key] += 1
-            except Exception:
-                return []
-        else:
-            for m in (self.metadata or []):
-                if not isinstance(m, dict):
-                    continue
-                if not self._match_source_meta_filters(m, filters):
-                    continue
-                sm = self._get_source_meta(m)
-                key = sm.get(group_by) if group_by in sm else None
-                key = str(key or "").strip() or "(empty)"
-                counts[key] += 1
+        for m in (self.metadata or []):
+            if not isinstance(m, dict):
+                continue
+            if not self._match_source_meta_filters(m, filters):
+                continue
+            sm = self._get_source_meta(m)
+            key = sm.get(group_by) if group_by in sm else None
+            key = str(key or "").strip() or "(empty)"
+            counts[key] += 1
 
         out = [{"key": k, "count": v} for k, v in counts.items()]
         out.sort(key=lambda x: x["count"], reverse=True)
@@ -306,15 +294,6 @@ class VectorDatabase:
     ) -> Dict[str, Any]:
         if not filters:
             raise ValueError("filters 不能为空")
-
-        if self.backend == "chroma":
-            res = self.query_by_source_meta(filters=filters, offset=0, limit=100_000, include_content=False)
-            ids = [x.get("id") for x in (res.get("items") or []) if x.get("id")]
-            matched = len(ids)
-            if dry_run or matched == 0:
-                return {"matched": matched, "deleted": 0, "sample_ids": ids[:sample], "remaining": self.count()}
-            self.collection.delete(ids=ids)
-            return {"matched": matched, "deleted": matched, "sample_ids": ids[:sample], "remaining": self.count()}
 
         metas = [m for m in (self.metadata or []) if isinstance(m, dict)]
         to_delete = [i for i, m in enumerate(metas) if self._match_source_meta_filters(m, filters)]
@@ -351,14 +330,6 @@ class VectorDatabase:
         return {"matched": matched, "deleted": matched, "sample_ids": sample_ids, "remaining": self.count()}
 
     def reset(self) -> None:
-        if self.backend == "chroma":
-            try:
-                self.client.delete_collection("questions")
-            except Exception:
-                pass
-            self._init_chroma()
-            return
-
         if self.backend == "faiss":
             self.index = None
             self.dimension = None
@@ -397,8 +368,6 @@ class VectorDatabase:
 
         if self.backend == "faiss":
             return self._add_faiss(questions, embeddings, total_input=total_input)
-        elif self.backend == "chroma":
-            return self._add_chroma(questions, embeddings, total_input=total_input)
         else:
             return self._add_simple(questions, embeddings, total_input=total_input)
     
@@ -449,79 +418,11 @@ class VectorDatabase:
         
         # 保存元数据
         for q in filtered_questions:
-            self.metadata.append({
-                "id": q.get("id", f"q{len(self.metadata)}"),
-                "content": q.get("content", ""),
-                "question_type": q.get("question_type", ""),
-                "knowledge_points": q.get("knowledge_points", []),
-                "difficulty": q.get("difficulty", 3),
-                "source_meta": q.get("source_meta", {}),
-            })
+            self.metadata.append(self._build_storage_record(q))
         
         self._save_faiss()
 
         return {"total_input": total_input, "added": len(filtered_questions), "skipped_existing": skipped_existing}
-    
-    def _add_chroma(
-        self,
-        questions: List[Dict[str, Any]],
-        embeddings: List[List[float]],
-        total_input: int,
-    ) -> Dict[str, int]:
-        """添加到Chroma（按id去重）"""
-        ids = [q.get("id", f"q{i}") for i, q in enumerate(questions)]
-
-        existing_ids: set = set()
-        try:
-            existing = self.collection.get(ids=ids)
-            for _id in (existing.get("ids") or []):
-                existing_ids.add(_id)
-        except Exception:
-            # 某些版本/实现中 get(ids=[]) 或 ids 过长可能报错；这里容错为不预先过滤
-            existing_ids = set()
-
-        filtered_ids: List[str] = []
-        filtered_embeddings: List[List[float]] = []
-        filtered_documents: List[str] = []
-        filtered_metadatas: List[Dict[str, Any]] = []
-
-        skipped_existing = 0
-        for q, qid, emb in zip(questions, ids, embeddings):
-            if qid in existing_ids:
-                skipped_existing += 1
-                continue
-            filtered_ids.append(qid)
-            filtered_embeddings.append(emb)
-            filtered_documents.append(q.get("content", ""))
-            filtered_metadatas.append(
-                {
-                    "question_type": q.get("question_type", ""),
-                    "knowledge_points": ",".join(q.get("knowledge_points", [])),
-                    "difficulty": str(q.get("difficulty", 3)),
-                    "source_meta": json.dumps(q.get("source_meta", {}), ensure_ascii=False),
-                }
-            )
-
-        if not filtered_ids:
-            return {"total_input": total_input, "added": 0, "skipped_existing": skipped_existing}
-
-        # 优先使用 upsert（如果可用），否则 add
-        if hasattr(self.collection, "upsert"):
-            self.collection.upsert(
-                ids=filtered_ids,
-                embeddings=filtered_embeddings,
-                documents=filtered_documents,
-                metadatas=filtered_metadatas,
-            )
-        else:
-            self.collection.add(
-                ids=filtered_ids,
-                embeddings=filtered_embeddings,
-                documents=filtered_documents,
-                metadatas=filtered_metadatas,
-            )
-
-        return {"total_input": total_input, "added": len(filtered_ids), "skipped_existing": skipped_existing}
     
     def _add_simple(
         self,
@@ -537,15 +438,9 @@ class VectorDatabase:
             if qid and qid in existing_ids:
                 skipped_existing += 1
                 continue
-            self.metadata.append({
-                "id": q.get("id", f"q{len(self.metadata)}"),
-                "content": q.get("content", ""),
-                "question_type": q.get("question_type", ""),
-                "knowledge_points": q.get("knowledge_points", []),
-                "difficulty": q.get("difficulty", 3),
-                "source_meta": q.get("source_meta", {}),
-                "embedding": emb,  # 简单存储也保存向量
-            })
+            entry = self._build_storage_record(q)
+            entry["embedding"] = emb  # 简单存储也保存向量
+            self.metadata.append(entry)
             if qid:
                 existing_ids.add(qid)
         self._save_simple()
@@ -572,8 +467,6 @@ class VectorDatabase:
         """
         if self.backend == "faiss":
             return self._search_faiss(query_embedding, top_k, filters)
-        elif self.backend == "chroma":
-            return self._search_chroma(query_embedding, top_k, filters)
         else:
             return self._search_simple(query_embedding, top_k, filters)
     
@@ -609,41 +502,6 @@ class VectorDatabase:
         
         return results
     
-    def _search_chroma(
-        self,
-        query_embedding: List[float],
-        top_k: int,
-        filters: Optional[Dict[str, Any]]
-    ) -> List[Tuple[Dict[str, Any], float]]:
-        """Chroma搜索"""
-        where = {}
-        if filters:
-            if "knowledge_points" in filters:
-                # Chroma的过滤语法
-                where["knowledge_points"] = {"$contains": filters["knowledge_points"][0]}
-        
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            where=where if where else None
-        )
-        
-        output = []
-        for i, (doc, metadata, distance) in enumerate(zip(
-            results['documents'][0],
-            results['metadatas'][0],
-            results['distances'][0]
-        )):
-            output.append((
-                {
-                    "content": doc,
-                    **metadata
-                },
-                1 / (1 + distance)  # 转换为相似度
-            ))
-        
-        return output
-    
     def _search_simple(
         self,
         query_embedding: List[float],
@@ -676,16 +534,18 @@ class VectorDatabase:
         return similarities[:top_k]
     
     def _match_filters(self, metadata: Dict[str, Any], filters: Dict[str, Any]) -> bool:
-        """检查元数据是否匹配过滤条件"""
+        """检查元数据是否匹配过滤条件（仅读 question_meta）"""
+        qm = metadata.get("question_meta", {})
+        
         if "knowledge_points" in filters:
-            meta_kp = set(metadata.get("knowledge_points", []))
+            meta_kp = set(qm.get("knowledge_points", []))
             filter_kp = set(filters["knowledge_points"])
             if not meta_kp.intersection(filter_kp):
                 return False
         
         if "difficulty" in filters:
             diff_range = filters["difficulty"]
-            meta_diff = metadata.get("difficulty", 3)
+            meta_diff = qm.get("difficulty", 3)
             if not (diff_range[0] <= meta_diff <= diff_range[1]):
                 return False
         
@@ -707,8 +567,5 @@ class VectorDatabase:
         """获取题目数量"""
         if self.backend == "faiss":
             return self.index.ntotal if self.index else 0
-        elif self.backend == "chroma":
-            return self.collection.count()
         else:
             return len(self.metadata)
-

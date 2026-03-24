@@ -15,12 +15,6 @@
   ```bash
   git commit -m "backup: before vector storage refactoring"
   ```
-
-- [ ] 创建新分支
-  ```bash
-  git checkout -b feature/vector-storage-enhancement
-  ```
-
 ---
 
 ### 阶段2：数据模型更新（30分钟）
